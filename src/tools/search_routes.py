@@ -31,14 +31,14 @@ def _is_stale(last_updated_str: str | None) -> bool:
         return True
 
 
+_CHECKED_BAGGAGE_MULTIPLIER = 0.2  # mirrors RiskFactor.CHECKED_BAGGAGE in scorer.py
+
+
 def _adjusted_hidden_score(base_score: float, carry_on_only: bool) -> float:
+    """Apply checked-baggage risk to the stored base score (which has no risks baked in)."""
     if not carry_on_only:
         return base_score
-    return score_candidate(
-        price_direct=1.0,
-        price_hidden=1.0 - base_score,  # reverse-engineer savings_pct
-        risks=[RiskFactor.CHECKED_BAGGAGE],
-    )
+    return round(base_score * _CHECKED_BAGGAGE_MULTIPLIER, 3)
 
 
 async def search_routes(

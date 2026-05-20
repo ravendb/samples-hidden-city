@@ -37,7 +37,10 @@ class RouteDocument(BaseModel):
         return f"routes/{self.origin}-{self.destination}"
 
     def is_stale(self, max_age_hours: float = 2.0) -> bool:
-        age = datetime.now(timezone.utc) - self.last_updated.replace(tzinfo=timezone.utc)
+        ts = self.last_updated
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        age = datetime.now(timezone.utc) - ts
         return age.total_seconds() > max_age_hours * 3600
 
 

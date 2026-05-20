@@ -27,9 +27,11 @@ def _create_subscription_if_missing(store) -> str:
     )
     try:
         return store.subscriptions.create(options)
-    except Exception:
-        # Already exists — return existing name
-        return SUBSCRIPTION_NAME
+    except Exception as e:
+        if "already exists" in str(e).lower() or "subscription with the specified name" in str(e).lower():
+            log.info("Subscription %r already exists, reusing", SUBSCRIPTION_NAME)
+            return SUBSCRIPTION_NAME
+        raise
 
 
 def _handle_batch(batch) -> None:

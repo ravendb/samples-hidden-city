@@ -36,7 +36,7 @@ class TestSearchRoutes:
         mock_query.where_equals.return_value = mock_query
         mock_query.where_greater_than.return_value = mock_query
         mock_query.take.return_value = mock_query
-        mock_query.all.return_value = iter(routes)
+        mock_query.all = MagicMock(side_effect=lambda: iter(routes))
 
         mock_session = MagicMock()
         mock_session.__enter__ = MagicMock(return_value=mock_session)
@@ -150,6 +150,7 @@ class TestSaveConversation:
 
         assert result["saved"] is True
         assert result["total_turns"] == 2  # user + assistant
+        assert mock_session.save_changes.called
         doc = stored_docs["sessions/u1-1"]
         assert len(doc["turns"]) == 2
 
@@ -186,6 +187,7 @@ class TestSaveConversation:
                 constraints={"carry_on_only": True},
             )
 
+        assert mock_session.save_changes.called
         doc = stored_docs["sessions/u1-1"]
         assert doc["active_constraints"]["carry_on_only"] is True
         assert doc["active_constraints"]["max_stops"] == 2  # unchanged

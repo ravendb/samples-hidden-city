@@ -148,12 +148,14 @@ def _write_to_ravendb(
         duration_avg_min=duration_min,
         last_updated=datetime.now(timezone.utc),
     )
-    store = get_store()
-    with store.open_session() as session:
-        session.store(route.model_dump(), route.route_id())
-        session.save_changes()
-
-    log.info("Cached live price for %s→%s: $%s", origin, destination, price)
+    try:
+        store = get_store()
+        with store.open_session() as session:
+            session.store(route.model_dump(), route.route_id())
+            session.save_changes()
+        log.info("Cached live price for %s→%s: $%s", origin, destination, price)
+    except Exception:
+        log.exception("Failed to cache price for %s→%s — continuing", origin, destination)
 
 
 async def get_live_price(
