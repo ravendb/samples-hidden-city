@@ -1,4 +1,4 @@
-# start.ps1 — starts the full local stack in one command
+# start.ps1 -- starts the full local stack in one command
 #
 # Usage:
 #   .\start.ps1             # RavenDB + seed + agent
@@ -28,7 +28,6 @@ function Write-Warn($msg) {
 function Find-Uv {
     $found = Get-Command uv -ErrorAction SilentlyContinue
     if ($found) { return $found.Source }
-    # Common install locations (winget, official installer, cargo)
     $candidates = @(
         "$env:LOCALAPPDATA\uv\uv.exe",
         "$env:USERPROFILE\.local\bin\uv.exe",
@@ -38,6 +37,22 @@ function Find-Uv {
         if (Test-Path $c) { return $c }
     }
     return $null
+}
+
+function Get-EnvValue($lines, $key) {
+    $line = $lines | Where-Object { $_ -match "^$key=(.+)$" } | Select-Object -First 1
+    if ($line -match "^$key=(.+)$") { return $Matches[1].Trim() }
+    return $null
+}
+
+function Set-EnvValue($file, $key, $value) {
+    $content = Get-Content $file
+    if ($content -match "^$key=") {
+        $content = $content -replace "^$key=.*", "$key=$value"
+    } else {
+        $content += "$key=$value"
+    }
+    $content | Set-Content $file
 }
 
 # --- venv setup (auto-create or recreate if wrong Python version) ---
@@ -78,42 +93,25 @@ $totalSteps = if ($SkipSeed) { 2 } else { 3 }
 
 # --- step 0: .env + license ---
 if (-not (Test-Path "$root\.env")) {
-    Write-Warn ".env not found — copying from .env.example"
+    Write-Warn ".env not found -- copying from .env.example"
     Copy-Item "$root\.env.example" "$root\.env"
-    Write-Warn "Fill in API keys in .env if you need live flight search."
 }
 
 if (Test-Path "$root\license.json") {
     $env:RAVEN_LICENSE = Get-Content "$root\license.json" -Raw
     Write-Ok "License loaded from license.json"
 } else {
-    Write-Warn "license.json not found — RavenDB will run in Developer mode (3 GB limit, 1 node)."
+    Write-Warn "license.json not found -- RavenDB will run in Developer mode (3 GB limit, 1 node)."
     Write-Warn "To use your license: save the license JSON to license.json in the repo root."
 }
 
 # --- API keys check + optional prompt ---
 $envLines = Get-Content "$root\.env"
 
-function Get-EnvValue($lines, $key) {
-    $line = $lines | Where-Object { $_ -match "^$key=(.+)$" } | Select-Object -First 1
-    if ($line -match "^$key=(.+)$") { return $Matches[1].Trim() }
-    return $null
-}
-
-function Set-EnvValue($file, $key, $value) {
-    $content = Get-Content $file
-    if ($content -match "^$key=") {
-        $content = $content -replace "^$key=.*", "$key=$value"
-    } else {
-        $content += "$key=$value"
-    }
-    $content | Set-Content $file
-}
-
 $keysInfo = @(
-    @{ Key = "ANTHROPIC_API_KEY"; Desc = "Anthropic API key (agent won't start without it)"; Required = $true },
-    @{ Key = "KIWI_API_KEY";      Desc = "Kiwi Tequila key (optional — live hidden city search)"; Required = $false },
-    @{ Key = "AMADEUS_CLIENT_ID"; Desc = "Amadeus client ID (optional — live direct prices)";     Required = $false },
+    @{ Key = "ANTHROPIC_API_KEY";     Desc = "Anthropic API key (agent won't start without it)";  Required = $true  },
+    @{ Key = "KIWI_API_KEY";          Desc = "Kiwi Tequila key (optional, live hidden city)";      Required = $false },
+    @{ Key = "AMADEUS_CLIENT_ID";     Desc = "Amadeus client ID (optional, live direct prices)";   Required = $false },
     @{ Key = "AMADEUS_CLIENT_SECRET"; Desc = "Amadeus client secret";                              Required = $false }
 )
 
@@ -123,7 +121,7 @@ foreach ($k in $keysInfo) {
         if (-not $anyMissing) {
             Write-Host ""
             Write-Warn "Some API keys are missing in .env. Enter values now or press Enter to skip."
-            Write-Host "  (Skipped keys fall back to fixture data. See README for where to get them.)`n" -ForegroundColor Yellow
+            Write-Host "  Skipped keys fall back to fixture data. See README for where to get them.`n" -ForegroundColor Yellow
             $anyMissing = $true
         }
         $label = if ($k.Required) { "[required]" } else { "[optional]" }
@@ -131,10 +129,8 @@ foreach ($k in $keysInfo) {
         if ($val) {
             Set-EnvValue "$root\.env" $k.Key $val
             Write-Ok "$($k.Key) saved to .env"
-        } else {
-            if ($k.Required) {
-                Write-Warn "$($k.Key) not set — agent will fail to call the LLM"
-            }
+        } elseif ($k.Required) {
+            Write-Warn "$($k.Key) not set -- agent will fail to call the LLM"
         }
     }
 }
@@ -170,6 +166,7 @@ if ($Worker) {
 # --- last step: agent (foreground) ---
 Write-Step $totalSteps $totalSteps "Starting agent at http://localhost:8000  (Ctrl+C to stop)"
 Write-Host "  Swagger UI:    http://localhost:8000/docs" -ForegroundColor Gray
-Write-Host "  RavenDB Studio: http://localhost:8080`n" -ForegroundColor Gray
+Write-Host "  RavenDB Studio: http://localhost:8080" -ForegroundColor Gray
+Write-Host ""
 
 & $uvicorn src.agent.app:app --reload --port 8000
