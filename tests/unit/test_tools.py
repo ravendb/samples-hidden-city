@@ -1,6 +1,7 @@
 """
 Unit tests for individual tool implementations — RavenDB and HTTP clients mocked.
 """
+import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -8,6 +9,8 @@ import pytest
 
 from src.tools.save_conversation import save_conversation
 from src.tools.search_routes import _is_stale, search_routes
+
+WARN_TOOL_TOKENS = 800  # mirrors src/agent/loop.py
 
 
 class TestIsStale:
@@ -124,6 +127,34 @@ class TestSearchRoutes:
             result = await search_routes(origin="WAW")
 
         assert result["routes"][0]["stale"] is True
+
+    @pytest.mark.asyncio
+    async def test_result_within_800_token_budget(self):
+        """Tool result must stay inside the 800-token budget enforced by the agent loop."""
+        now = datetime.now(timezone.utc).isoformat()
+        routes = [
+            {
+                "origin": "WAW",
+                "destination": f"DST{i}",
+                "hubs": ["LHR"],
+                "typical_price": {"min": 200.0 + i * 10, "max": 300.0 + i * 10},
+                "hidden_city_score": 0.62,
+                "hidden_city_via": "LHR",
+                "hidden_city_decoy": f"DST{i}",
+                "last_updated": now,
+            }
+            for i in range(5)
+        ]
+        mock_store = self._mock_session_with_routes(routes)
+
+        with patch("src.tools.search_routes.get_store", return_value=mock_store):
+            result = await search_routes(origin="WAW")
+
+        result_json = json.dumps(result)
+        estimated_tokens = len(result_json) // 4
+        assert estimated_tokens <= WARN_TOOL_TOKENS, (
+            f"search_routes result is ~{estimated_tokens} tokens — exceeds {WARN_TOOL_TOKENS}-token budget"
+        )
 
 
 class TestSaveConversation:

@@ -155,5 +155,35 @@
     "country": "US",
     "coordinates": { "lat": 42.3656, "lng": -71.0096 },
     "nearby": []
+  },
+  {
+    "iata": "CKG",
+    "name": "Chongqing Jiangbei",
+    "city": "Chongqing",
+    "country": "CN",
+    "coordinates": { "lat": 29.7192, "lng": 106.6417 },
+    "nearby": [
+      { "iata": "CTU", "distance_km": 300, "train": true }
+    ]
+  },
+  {
+    "iata": "PVG",
+    "name": "Shanghai Pudong",
+    "city": "Shanghai",
+    "country": "CN",
+    "coordinates": { "lat": 31.1443, "lng": 121.8083 },
+    "nearby": [
+      { "iata": "SHA", "distance_km": 30, "train": true }
+    ]
+  },
+  {
+    "iata": "PEK",
+    "name": "Beijing Capital",
+    "city": "Beijing",
+    "country": "CN",
+    "coordinates": { "lat": 40.0799, "lng": 116.6031 },
+    "nearby": [
+      { "iata": "PKX", "distance_km": 67, "train": true }
+    ]
   }
 ]
