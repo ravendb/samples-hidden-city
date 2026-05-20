@@ -28,16 +28,18 @@ with every user. RavenDB inside the cluster makes retrieval a local call.
 ### Data Flow
 
 ```
-Amadeus API → ETL Pod → RavenDB ←──tool call──┐
-                                               │
-                            User → Chat UI → Agent → LLM-d (in-cluster)
-                                               │
-                                         RavenDB (tool result)
+Travelpayouts ──(CronJob, 6h)──→ RavenDB (in-cluster)
+                                      ↑ ↑
+Kiwi / Amadeus ←──(cache miss)── Agent │ └── tool results
+                                      │
+User → Chat UI ──────────────────→ Agent (FastAPI)
+                                      │
+                              only prompt ↓
+                               Anthropic API
 ```
 
 The agent calls RavenDB as an **LLM tool** — the model decides what to retrieve
-and when. Nothing is blindly injected. Only the user prompt goes outbound to the
-inference pod (which is also in-cluster via LLM-d/vLLM).
+and when. Nothing is blindly injected. Only the user's prompt leaves the cluster.
 
 ### Three Data Paths
 
