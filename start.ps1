@@ -91,6 +91,55 @@ if (Test-Path "$root\license.json") {
     Write-Warn "To use your license: save the license JSON to license.json in the repo root."
 }
 
+# --- API keys check + optional prompt ---
+$envLines = Get-Content "$root\.env"
+
+function Get-EnvValue($lines, $key) {
+    $line = $lines | Where-Object { $_ -match "^$key=(.+)$" } | Select-Object -First 1
+    if ($line -match "^$key=(.+)$") { return $Matches[1].Trim() }
+    return $null
+}
+
+function Set-EnvValue($file, $key, $value) {
+    $content = Get-Content $file
+    if ($content -match "^$key=") {
+        $content = $content -replace "^$key=.*", "$key=$value"
+    } else {
+        $content += "$key=$value"
+    }
+    $content | Set-Content $file
+}
+
+$keysInfo = @(
+    @{ Key = "ANTHROPIC_API_KEY"; Desc = "Anthropic API key (agent won't start without it)"; Required = $true },
+    @{ Key = "KIWI_API_KEY";      Desc = "Kiwi Tequila key (optional — live hidden city search)"; Required = $false },
+    @{ Key = "AMADEUS_CLIENT_ID"; Desc = "Amadeus client ID (optional — live direct prices)";     Required = $false },
+    @{ Key = "AMADEUS_CLIENT_SECRET"; Desc = "Amadeus client secret";                              Required = $false }
+)
+
+$anyMissing = $false
+foreach ($k in $keysInfo) {
+    if (-not (Get-EnvValue $envLines $k.Key)) {
+        if (-not $anyMissing) {
+            Write-Host ""
+            Write-Warn "Some API keys are missing in .env. Enter values now or press Enter to skip."
+            Write-Host "  (Skipped keys fall back to fixture data. See README for where to get them.)`n" -ForegroundColor Yellow
+            $anyMissing = $true
+        }
+        $label = if ($k.Required) { "[required]" } else { "[optional]" }
+        $val = Read-Host "  $label $($k.Desc)"
+        if ($val) {
+            Set-EnvValue "$root\.env" $k.Key $val
+            Write-Ok "$($k.Key) saved to .env"
+        } else {
+            if ($k.Required) {
+                Write-Warn "$($k.Key) not set — agent will fail to call the LLM"
+            }
+        }
+    }
+}
+if ($anyMissing) { Write-Host "" }
+
 # --- step 1: RavenDB ---
 Write-Step 1 $totalSteps "Starting RavenDB (docker compose)..."
 docker compose up -d --wait ravendb
