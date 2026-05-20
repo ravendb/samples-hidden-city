@@ -8,6 +8,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
+from typing import AsyncGenerator
 
 import anthropic
 
@@ -38,7 +39,7 @@ class AgentResult:
 
 
 def _estimate_tokens(text: str) -> int:
-    """Rough estimate: 1 token ≈ 4 chars. Used for budget warnings only."""
+    """Rough estimate: 1 token ~= 4 chars. Used for budget warnings only."""
     return len(text) // 4
 
 
@@ -70,7 +71,7 @@ async def run_agent(
         total_input += response.usage.input_tokens
         total_output += response.usage.output_tokens
         log.info(
-            "Iteration %d — stop=%s in=%d out=%d",
+            "Iteration %d -- stop=%s in=%d out=%d",
             iteration,
             response.stop_reason,
             response.usage.input_tokens,
@@ -122,3 +123,62 @@ async def run_agent(
             ]
 
     raise RuntimeError(f"Agent exceeded {MAX_ITERATIONS} iterations without finishing")
+
+
+async def stream_agent(
+    user_message: str,
+    prior_turns: list[dict],
+) -> AsyncGenerator[str, None]:
+    """Streaming variant -- yields SSE-formatted strings for /chat/stream."""
+    client = anthropic.AsyncAnthropic()
+    messages = prior_turns + [{"role": "user", "content": user_message}]
+    total_input, total_output, tool_calls_count = 0, 0, 0
+
+    def sse(data: dict) -> str:
+        return f"data: {json.dumps(data)}\n\n"
+
+    for _ in range(MAX_ITERATIONS):
+        tool_results: list[dict] = []
+        async with client.messages.stream(
+            model=MODEL,
+            max_tokens=MAX_RESPONSE_TOKENS,
+            system=SYSTEM_PROMPT,
+            tools=TOOL_DEFINITIONS,
+            messages=messages,
+        ) as stream:
+            async for text_chunk in stream.text_stream:
+                yield sse({"type": "delta", "text": text_chunk})
+            msg = await stream.get_final_message()
+
+        total_input += msg.usage.input_tokens
+        total_output += msg.usage.output_tokens
+
+        if msg.stop_reason == "end_turn":
+            yield sse({
+                "type": "done",
+                "input_tokens": total_input,
+                "output_tokens": total_output,
+                "total_tokens": total_input + total_output,
+                "tool_calls": tool_calls_count,
+            })
+            return
+
+        for block in msg.content:
+            if block.type != "tool_use":
+                continue
+            tool_calls_count += 1
+            yield sse({"type": "tool_call", "name": block.name})
+            result = await dispatch_tool(block.name, block.input)
+            result_json = json.dumps(result, default=str)
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": block.id,
+                "content": result_json,
+            })
+
+        messages = messages + [
+            {"role": "assistant", "content": msg.content},
+            {"role": "user", "content": tool_results},
+        ]
+
+    yield sse({"type": "error", "message": f"Agent exceeded {MAX_ITERATIONS} iterations"})

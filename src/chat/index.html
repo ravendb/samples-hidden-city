@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hidden City Flight Search</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #252836;
+    --border: #2e3347;
+    --accent: #f97316;
+    --accent2: #3b82f6;
+    --text: #e2e8f0;
+    --text-muted: #64748b;
+    --hidden-city: #f97316;
+    --regular: #3b82f6;
+    --radius: 8px;
+    --font: 'Inter', system-ui, sans-serif;
+  }
+  html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); }
+  #app { display: flex; flex-direction: column; height: 100vh; }
+
+  /* Header */
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 20px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    z-index: 1000;
+  }
+  header h1 { font-size: 1rem; font-weight: 600; }
+  header .subtitle { font-size: 0.75rem; color: var(--text-muted); }
+  .legend { display: flex; gap: 16px; margin-left: auto; align-items: center; font-size: 0.72rem; color: var(--text-muted); }
+  .legend-item { display: flex; align-items: center; gap: 5px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .dot-hc { background: var(--hidden-city); }
+  .dot-reg { background: var(--regular); }
+
+  /* Map */
+  #map { flex: 0 0 42vh; position: relative; }
+  #map-container { height: 100%; }
+
+  /* Token bar */
+  #token-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 16px;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    font-size: 0.72rem; color: var(--text-muted);
+  }
+  #token-bar .label { white-space: nowrap; }
+  #token-progress-wrap { flex: 1; height: 6px; background: var(--surface2); border-radius: 3px; overflow: hidden; }
+  #token-progress { height: 100%; width: 0%; background: var(--accent); border-radius: 3px; transition: width 0.3s; }
+  #token-count { white-space: nowrap; min-width: 80px; text-align: right; }
+
+  /* Chat panel */
+  #chat { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  #messages {
+    flex: 1; overflow-y: auto; padding: 14px 16px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .msg { display: flex; flex-direction: column; gap: 4px; max-width: 82%; }
+  .msg.user { align-self: flex-end; align-items: flex-end; }
+  .msg.assistant { align-self: flex-start; }
+  .bubble {
+    padding: 9px 13px; border-radius: var(--radius);
+    font-size: 0.85rem; line-height: 1.55;
+  }
+  .msg.user .bubble { background: var(--accent); color: #fff; }
+  .msg.assistant .bubble { background: var(--surface2); border: 1px solid var(--border); }
+  .bubble p { margin: 0 0 6px; } .bubble p:last-child { margin: 0; }
+  .bubble h1,.bubble h2,.bubble h3 { margin: 8px 0 4px; font-size: 0.9rem; }
+  .bubble ul,.bubble ol { padding-left: 18px; margin: 4px 0; }
+  .bubble table { border-collapse: collapse; width: 100%; font-size: 0.8rem; margin: 6px 0; }
+  .bubble th,.bubble td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; }
+  .bubble th { background: var(--surface); }
+  .bubble code { background: var(--surface); padding: 1px 4px; border-radius: 3px; font-size: 0.8rem; }
+  .bubble pre { background: var(--surface); padding: 8px; border-radius: var(--radius); overflow-x: auto; font-size: 0.78rem; }
+  .tool-indicator {
+    font-size: 0.7rem; color: var(--text-muted); padding: 2px 0;
+    display: flex; align-items: center; gap: 5px;
+  }
+  .tool-indicator::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--accent2); display: inline-block; animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+  /* Input */
+  #input-area {
+    display: flex; gap: 8px; padding: 10px 16px;
+    background: var(--surface); border-top: 1px solid var(--border);
+  }
+  #user-input {
+    flex: 1; background: var(--surface2); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 9px 12px;
+    color: var(--text); font-size: 0.85rem; resize: none; min-height: 38px; max-height: 120px;
+    font-family: var(--font);
+  }
+  #user-input:focus { outline: none; border-color: var(--accent); }
+  #send-btn {
+    background: var(--accent); color: #fff; border: none; border-radius: var(--radius);
+    padding: 0 18px; cursor: pointer; font-size: 0.85rem; font-weight: 500;
+    transition: opacity 0.15s;
+  }
+  #send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* Leaflet overrides */
+  .leaflet-container { background: #0d1117; }
+  .airport-marker {
+    background: var(--accent2); border: 2px solid #fff;
+    border-radius: 50%; width: 10px; height: 10px;
+    cursor: pointer; transition: transform 0.15s;
+  }
+  .airport-marker:hover { transform: scale(1.6); }
+  .airport-marker.selected { background: var(--accent); border-color: var(--accent); transform: scale(1.4); }
+
+  /* Tooltip */
+  .leaflet-tooltip {
+    background: var(--surface2) !important;
+    border: 1px solid var(--border) !important;
+    color: var(--text) !important;
+    font-size: 0.75rem !important;
+    padding: 4px 8px !important;
+    border-radius: 5px !important;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.5) !important;
+  }
+  .leaflet-tooltip-top::before { border-top-color: var(--border) !important; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.92 12a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.82 1h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 8.91a16 16 0 0 0 5.61 5.61l.91-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+        <h1>Hidden City Flight Search</h1>
+      </div>
+      <div class="subtitle">RavenDB in-cluster agent memory demo</div>
+    </div>
+    <div class="legend">
+      <div class="legend-item"><div class="dot dot-hc"></div> hidden city route</div>
+      <div class="legend-item"><div class="dot dot-reg"></div> regular route</div>
+      <div class="legend-item" style="border-left:1px solid var(--border);padding-left:16px">
+        click airport to filter + prefill chat
+      </div>
+    </div>
+  </header>
+
+  <div id="map"><div id="map-container"></div></div>
+
+  <div id="token-bar">
+    <span class="label">tokens/turn</span>
+    <div id="token-progress-wrap"><div id="token-progress"></div></div>
+    <span id="token-count">-- / 1500</span>
+    <span style="border-left:1px solid var(--border);padding-left:8px">naive baseline: 50 000</span>
+  </div>
+
+  <div id="chat">
+    <div id="messages">
+      <div class="msg assistant">
+        <div class="bubble">
+          <p>Welcome! I can find flights and detect hidden city opportunities where booking a connecting route is cheaper than flying direct.</p>
+          <p>Click an airport on the map or type your search below — for example: <em>Find hidden city flights from Warsaw to London</em></p>
+        </div>
+      </div>
+    </div>
+    <div id="input-area">
+      <textarea id="user-input" placeholder="Ask about flights..." rows="1"></textarea>
+      <button id="send-btn">Send</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const TOKEN_BUDGET = 1500;
+let selectedAirport = null;
+let map, arcLayer;
+
+// ---- Map setup ----
+map = L.map('map-container', {
+  center: [30, 10],
+  zoom: 2,
+  zoomControl: true,
+  attributionControl: false,
+});
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  maxZoom: 19,
+}).addTo(map);
+arcLayer = L.layerGroup().addTo(map);
+
+function makeIcon(iata, isSelected) {
+  return L.divIcon({
+    className: '',
+    html: `<div class="airport-marker${isSelected ? ' selected' : ''}" title="${iata}"></div>`,
+    iconSize: [10, 10],
+    iconAnchor: [5, 5],
+  });
+}
+
+// Great-circle arc as a polyline approximation
+function gcArc(lat1, lng1, lat2, lng2, steps = 50) {
+  const toRad = d => d * Math.PI / 180;
+  const toDeg = r => r * 180 / Math.PI;
+  const r1 = toRad(lat1), lo1 = toRad(lng1);
+  const r2 = toRad(lat2), lo2 = toRad(lng2);
+  const pts = [];
+  for (let i = 0; i <= steps; i++) {
+    const f = i / steps;
+    const d = 2 * Math.asin(Math.sqrt(
+      Math.sin((r2 - r1) / 2) ** 2 +
+      Math.cos(r1) * Math.cos(r2) * Math.sin((lo2 - lo1) / 2) ** 2
+    ));
+    if (d === 0) { pts.push([lat1, lng1]); continue; }
+    const A = Math.sin((1 - f) * d) / Math.sin(d);
+    const B = Math.sin(f * d) / Math.sin(d);
+    const x = A * Math.cos(r1) * Math.cos(lo1) + B * Math.cos(r2) * Math.cos(lo2);
+    const y = A * Math.cos(r1) * Math.sin(lo1) + B * Math.cos(r2) * Math.sin(lo2);
+    const z = A * Math.sin(r1) + B * Math.sin(r2);
+    pts.push([toDeg(Math.atan2(z, Math.sqrt(x*x + y*y))), toDeg(Math.atan2(y, x))]);
+  }
+  return pts;
+}
+
+let airportsData = {};
+let markersMap = {};
+
+async function loadMap() {
+  const [airports, routes] = await Promise.all([
+    fetch('/api/airports').then(r => r.json()).catch(() => []),
+    fetch('/api/routes').then(r => r.json()).catch(() => []),
+  ]);
+
+  airports.forEach(a => {
+    const iata = a.iata || a.Id?.replace('airports/', '');
+    if (!iata) return;
+    const lat = a.coordinates?.lat ?? a.lat;
+    const lng = a.coordinates?.lng ?? a.lng;
+    if (lat == null || lng == null) return;
+    airportsData[iata] = { iata, name: a.name || iata, lat, lng };
+  });
+
+  // Draw route arcs
+  routes.forEach(r => {
+    const origin = r.origin;
+    const dest = r.destination;
+    const score = r.hidden_city_score ?? 0;
+    const a = airportsData[origin];
+    const b = airportsData[dest];
+    if (!a || !b) return;
+
+    const isHC = score > 0.5;
+    const pts = gcArc(a.lat, a.lng, b.lat, b.lng);
+    L.polyline(pts, {
+      color: isHC ? '#f97316' : '#3b82f6',
+      weight: isHC ? 1.8 : 1,
+      opacity: isHC ? 0.7 : 0.35,
+      dashArray: isHC ? null : '4 6',
+    }).addTo(arcLayer);
+  });
+
+  // Place airport markers
+  Object.values(airportsData).forEach(a => {
+    const marker = L.marker([a.lat, a.lng], {
+      icon: makeIcon(a.iata, false),
+      zIndexOffset: 500,
+    })
+    .bindTooltip(`<strong>${a.iata}</strong> ${a.name}`, { direction: 'top', offset: [0, -6] })
+    .on('click', () => selectAirport(a.iata))
+    .addTo(map);
+    markersMap[a.iata] = marker;
+  });
+}
+
+function selectAirport(iata) {
+  if (selectedAirport && markersMap[selectedAirport]) {
+    markersMap[selectedAirport].setIcon(makeIcon(selectedAirport, false));
+  }
+  if (selectedAirport === iata) {
+    selectedAirport = null;
+    document.getElementById('user-input').placeholder = 'Ask about flights...';
+    return;
+  }
+  selectedAirport = iata;
+  markersMap[iata]?.setIcon(makeIcon(iata, true));
+  const a = airportsData[iata];
+  const inp = document.getElementById('user-input');
+  inp.value = `Find hidden city flights from ${iata} (${a?.name ?? iata})`;
+  inp.focus();
+}
+
+loadMap();
+
+// ---- Token bar ----
+function updateTokenBar(total) {
+  const pct = Math.min(100, (total / TOKEN_BUDGET) * 100);
+  document.getElementById('token-progress').style.width = pct + '%';
+  document.getElementById('token-count').textContent = `${total.toLocaleString()} / ${TOKEN_BUDGET.toLocaleString()}`;
+  document.getElementById('token-progress').style.background =
+    pct > 90 ? '#ef4444' : pct > 70 ? '#eab308' : '#f97316';
+}
+
+// ---- Chat ----
+const messagesEl = document.getElementById('messages');
+const inputEl = document.getElementById('user-input');
+const sendBtn = document.getElementById('send-btn');
+
+function scrollBottom() {
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function appendMsg(role, html) {
+  const wrap = document.createElement('div');
+  wrap.className = `msg ${role}`;
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble';
+  bubble.innerHTML = html;
+  wrap.appendChild(bubble);
+  messagesEl.appendChild(wrap);
+  scrollBottom();
+  return bubble;
+}
+
+function appendToolIndicator(name) {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg assistant';
+  const ind = document.createElement('div');
+  ind.className = 'tool-indicator';
+  ind.textContent = `calling ${name}...`;
+  wrap.appendChild(ind);
+  messagesEl.appendChild(wrap);
+  scrollBottom();
+  return wrap;
+}
+
+async function sendMessage() {
+  const text = inputEl.value.trim();
+  if (!text) return;
+
+  inputEl.value = '';
+  inputEl.style.height = 'auto';
+  sendBtn.disabled = true;
+
+  appendMsg('user', escHtml(text));
+
+  const assistantBubble = appendMsg('assistant', '<span style="color:var(--text-muted)">...</span>');
+  let accText = '';
+  const toolIndicators = [];
+
+  try {
+    const res = await fetch('/chat/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: 'demo', session_id: '1', message: text }),
+    });
+
+    if (!res.ok) {
+      assistantBubble.innerHTML = `<span style="color:#ef4444">Server error ${res.status}</span>`;
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop(); // keep incomplete line
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        let ev;
+        try { ev = JSON.parse(line.slice(6)); } catch { continue; }
+
+        if (ev.type === 'delta') {
+          toolIndicators.forEach(el => el.remove());
+          toolIndicators.length = 0;
+          accText += ev.text;
+          assistantBubble.innerHTML = marked.parse(accText);
+          scrollBottom();
+        } else if (ev.type === 'tool_call') {
+          toolIndicators.push(appendToolIndicator(ev.name));
+        } else if (ev.type === 'done') {
+          toolIndicators.forEach(el => el.remove());
+          updateTokenBar(ev.total_tokens);
+        } else if (ev.type === 'error') {
+          assistantBubble.innerHTML += `<p style="color:#ef4444;margin-top:6px">${escHtml(ev.message)}</p>`;
+        }
+      }
+    }
+  } catch (err) {
+    assistantBubble.innerHTML = `<span style="color:#ef4444">Error: ${escHtml(String(err))}</span>`;
+  } finally {
+    sendBtn.disabled = false;
+    inputEl.focus();
+  }
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+sendBtn.addEventListener('click', sendMessage);
+inputEl.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+});
+inputEl.addEventListener('input', () => {
+  inputEl.style.height = 'auto';
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + 'px';
+});
+</script>
+</body>
+</html>

@@ -81,8 +81,11 @@ if (-not (Test-Path $python)) {
         exit 1
     }
     Write-Host "  Installing dependencies..." -ForegroundColor Gray
-    & $uv pip install --python "$root\.venv\Scripts\python.exe" -e "$root[dev]"
-    if ($LASTEXITCODE -ne 0) {
+    Push-Location $root
+    & $uv pip install --python "$root\.venv\Scripts\python.exe" -e ".[dev]"
+    $installExit = $LASTEXITCODE
+    Pop-Location
+    if ($installExit -ne 0) {
         Write-Error "Failed to install dependencies."
         exit 1
     }

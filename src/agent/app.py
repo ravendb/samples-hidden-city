@@ -1,22 +1,26 @@
 """
-FastAPI entrypoint — POST /chat is the only inbound surface.
+FastAPI entrypoint.
 Session loading/saving happens here; the loop itself is stateless.
 """
 import logging
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse, StreamingResponse
 
 load_dotenv()
 from pydantic import BaseModel
 
-from src.agent.loop import AgentResult, run_agent
+from src.agent.loop import AgentResult, run_agent, stream_agent
 from src.db.client import get_store
 from src.db.models import ConversationTurn
 
 log = logging.getLogger(__name__)
 app = FastAPI(title="Hidden City Flight Agent")
+
+_UI_PATH = Path(__file__).parent.parent / "chat" / "index.html"
 
 
 class ChatRequest(BaseModel):
@@ -44,8 +48,46 @@ def _load_prior_turns(user_id: str, session_id: str) -> list[dict]:
     if raw is None:
         return []
 
-    turns = raw.get("turns", [])[-10:]  # last 10 turns only
+    turns = raw.get("turns", [])[-10:]
     return [{"role": t["role"], "content": t["content"]} for t in turns]
+
+
+@app.get("/", response_class=HTMLResponse)
+@app.get("/ui", response_class=HTMLResponse)
+async def ui() -> HTMLResponse:
+    if not _UI_PATH.exists():
+        raise HTTPException(status_code=404, detail="UI not found")
+    return HTMLResponse(_UI_PATH.read_text(encoding="utf-8"))
+
+
+@app.get("/api/airports")
+async def get_airports() -> list[dict]:
+    """Return all airport documents for the map."""
+    store = get_store()
+    with store.open_session() as session:
+        docs = list(session.query(collection="Airports").all())
+    result = []
+    for d in docs:
+        if isinstance(d, dict):
+            result.append(d)
+        else:
+            result.append(vars(d) if hasattr(d, "__dict__") else {})
+    return result
+
+
+@app.get("/api/routes")
+async def get_routes() -> list[dict]:
+    """Return all route documents for the map arcs."""
+    store = get_store()
+    with store.open_session() as session:
+        docs = list(session.query(collection="Routes").all())
+    result = []
+    for d in docs:
+        if isinstance(d, dict):
+            result.append(d)
+        else:
+            result.append(vars(d) if hasattr(d, "__dict__") else {})
+    return result
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -68,6 +110,20 @@ async def chat(request: ChatRequest) -> ChatResponse:
         total_tokens=result.total_tokens,
         tool_calls=result.tool_calls,
     )
+
+
+@app.post("/chat/stream")
+async def chat_stream(request: ChatRequest) -> StreamingResponse:
+    prior_turns = _load_prior_turns(request.user_id, request.session_id)
+
+    async def generate():
+        async for chunk in stream_agent(
+            user_message=request.message,
+            prior_turns=prior_turns,
+        ):
+            yield chunk
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 @app.get("/health")
