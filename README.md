@@ -153,6 +153,82 @@ User → FastAPI → RavenDB (routes + sessions + subscriptions)
 
 ---
 
+## Prerequisites
+
+The table below lists everything you need installed before running this repo.
+The "Local dev" column covers the docker-compose path; the "Kubernetes" column
+covers the full cluster deployment.
+
+| Tool | Version | Local dev | Kubernetes | Install |
+|------|---------|-----------|------------|---------|
+| **Python** | 3.11+ | required | required | [python.org](https://www.python.org/downloads/) |
+| **uv** | latest | required | required | see below |
+| **Docker** | 24+ | required | — | [docs.docker.com](https://docs.docker.com/get-docker/) |
+| **Docker Compose** | v2 (bundled with Docker Desktop) | required | — | bundled with Docker Desktop |
+| **kubectl** | 1.28+ | — | required | [kubernetes.io](https://kubernetes.io/docs/tasks/tools/) |
+| **Kubernetes cluster** | 1.28+ | — | required | kind / minikube / cloud provider |
+
+> **Windows note:** Docker Desktop on Windows requires either WSL 2 or Hyper-V.
+> Make sure one of these is enabled before installing Docker.
+
+---
+
+## Python Environment Setup (uv)
+
+[uv](https://github.com/astral-sh/uv) replaces pip + venv in one fast tool.
+Install it once, then use it for all Python dependency work in this repo.
+
+### 1. Install uv
+
+**Windows (winget):**
+```powershell
+winget install astral-sh.uv
+```
+
+**macOS / Linux:**
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+**Fallback (pip):**
+```bash
+pip install uv
+```
+
+### 2. Create a virtual environment and install dependencies
+
+Run these once from the repo root:
+
+```bash
+uv venv                        # creates .venv in the repo root
+uv pip install -e ".[dev]"     # installs the package + all dev deps (pytest, ruff, …)
+```
+
+### 3. Activate the environment
+
+**Windows (PowerShell):**
+```powershell
+.venv\Scripts\Activate.ps1
+```
+
+**macOS / Linux:**
+```bash
+source .venv/bin/activate
+```
+
+After activation your prompt will show `(hidden-city)` and all `python` /
+`uvicorn` / `pytest` commands will use the repo's isolated environment.
+
+### Everyday uv commands
+
+```bash
+uv pip install <package>          # add a dependency
+uv pip install -e ".[dev]"        # re-sync after editing pyproject.toml
+uv pip list                       # list installed packages
+```
+
+---
+
 ## How to Run It
 
 ### Local (docker-compose)
@@ -162,13 +238,13 @@ User → FastAPI → RavenDB (routes + sessions + subscriptions)
 docker-compose up -d ravendb
 
 # 2. Seed airports and fixture routes
-python -m scripts.seed_local
+uv run python -m scripts.seed_local
 
 # 3. Start the agent API
-uvicorn src.agent.app:app --reload --port 8000
+uv run uvicorn src.agent.app:app --reload --port 8000
 
 # 4. (Optional) Start the price-drop subscription worker
-python -m src.worker.run
+uv run python -m src.worker.run
 ```
 
 The RavenDB Studio is available at http://localhost:8080 — no credentials needed
@@ -209,8 +285,8 @@ kubectl -n hidden-city get pods
 ### Run the test suite
 
 ```bash
-python -m pytest tests/unit/ -v          # 50 unit tests, no external deps
-python -m pytest tests/integration/ -v  # requires running RavenDB
+uv run pytest tests/unit/ -v          # 50 unit tests, no external deps
+uv run pytest tests/integration/ -v  # requires running RavenDB
 ```
 
 ### Interactive chat via the REST API
