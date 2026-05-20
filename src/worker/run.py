@@ -10,7 +10,11 @@ Run as a long-lived pod alongside the agent in k8s/worker/.
 import logging
 import os
 
+from dotenv import load_dotenv
 from pyravendb.subscriptions.document_subscriptions import SubscriptionCreationOptions
+from pyravendb.subscriptions.data import SubscriptionWorkerOptions
+
+load_dotenv()
 
 from src.db.client import get_store
 
@@ -28,7 +32,10 @@ def _create_subscription_if_missing(store) -> str:
     try:
         return store.subscriptions.create(options)
     except Exception as e:
-        if "already exists" in str(e).lower() or "subscription with the specified name" in str(e).lower():
+        # pyravendb wraps the server error in a secondary AttributeError;
+        # check both the exception and its cause for the "already in use" signal
+        full_msg = (str(e) + str(getattr(e, "__context__", "") or "")).lower()
+        if any(p in full_msg for p in ("already exists", "already in use", "subscription with the specified name")):
             log.info("Subscription %r already exists, reusing", SUBSCRIPTION_NAME)
             return SUBSCRIPTION_NAME
         raise
@@ -61,10 +68,12 @@ def run() -> None:
     subscription_name = _create_subscription_if_missing(store)
     log.info("Listening on subscription: %s", subscription_name)
 
-    worker = store.subscriptions.get_subscription_worker(subscription_name)
+    worker = store.subscriptions.get_subscription_worker(
+        SubscriptionWorkerOptions(subscription_name)
+    )
     try:
-        for batch in worker:
-            _handle_batch(batch)
+        thread = worker.run(_handle_batch)
+        thread.join()
     except KeyboardInterrupt:
         log.info("Worker stopped")
     finally:

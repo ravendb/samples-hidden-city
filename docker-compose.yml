@@ -7,12 +7,11 @@ services:
     environment:
       RAVEN_ARGS: "--Setup.Mode=None"
       RAVEN_Security_UnsecuredAccessAllowed: "PrivateNetwork"
-      RAVEN_License_Path: "/opt/ravendb/license.json"
+      RAVEN_License: ${RAVEN_LICENSE:-}
     volumes:
       - ravendb-data:/var/lib/ravendb/data
-      - ./license.json:/opt/ravendb/license.json:ro
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/alive"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/setup/alive"]
       interval: 10s
       timeout: 5s
       retries: 10

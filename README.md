@@ -161,7 +161,7 @@ covers the full cluster deployment.
 
 | Tool | Version | Local dev | Kubernetes | Install |
 |------|---------|-----------|------------|---------|
-| **Python** | 3.11+ | required | required | [python.org](https://www.python.org/downloads/) |
+| **Python** | 3.11–3.13 | required | required | [python.org](https://www.python.org/downloads/) — **3.14 not supported** (pyravendb dependency incompatibility) |
 | **uv** | latest | required | required | see below |
 | **Docker** | 24+ | required | — | [docs.docker.com](https://docs.docker.com/get-docker/) |
 | **Docker Compose** | v2 (bundled with Docker Desktop) | required | — | bundled with Docker Desktop |

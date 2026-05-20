@@ -5,7 +5,10 @@ Session loading/saving happens here; the loop itself is stateless.
 import logging
 import os
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
+
+load_dotenv()
 from pydantic import BaseModel
 
 from src.agent.loop import AgentResult, run_agent
