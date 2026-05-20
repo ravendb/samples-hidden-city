@@ -234,16 +234,19 @@ uv pip list                       # list installed packages
 ### Local (docker-compose)
 
 ```bash
-# 1. Start RavenDB
+# 1. Copy environment variables file (only needed once)
+cp .env.example .env
+
+# 2. Start RavenDB
 docker-compose up -d ravendb
 
-# 2. Seed airports and fixture routes
+# 3. Seed airports and fixture routes
 uv run python -m scripts.seed_local
 
-# 3. Start the agent API
+# 4. Start the agent API
 uv run uvicorn src.agent.app:app --reload --port 8000
 
-# 4. (Optional) Start the price-drop subscription worker
+# 5. (Optional) Start the price-drop subscription worker
 uv run python -m src.worker.run
 ```
 
