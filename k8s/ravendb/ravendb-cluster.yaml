@@ -1,0 +1,23 @@
+# RavenDB cluster managed by the Operator.
+# The Operator handles: bootstrapping, TLS wiring, rolling upgrades with
+# Raft quorum gates, and continuous reconciliation against this declared state.
+# Verify field names against your installed operator version before applying.
+apiVersion: ravendb.com/v1alpha1
+kind: RavenDBCluster
+metadata:
+  name: ravendb-cluster
+  namespace: hidden-city
+spec:
+  size: 3
+  storage:
+    size: 50Gi
+    storageClassName: standard
+  tls:
+    mode: ClusterExternalAccess
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "1000m"

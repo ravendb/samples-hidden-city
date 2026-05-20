@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: subscription-worker
+  namespace: hidden-city
+  labels:
+    app: subscription-worker
+spec:
+  replicas: 1  # exactly one worker — RavenDB subscription delivers to one consumer
+  selector:
+    matchLabels:
+      app: subscription-worker
+  template:
+    metadata:
+      labels:
+        app: subscription-worker
+    spec:
+      containers:
+        - name: worker
+          image: hidden-city:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "src.worker.run"]
+          envFrom:
+            - configMapRef:
+                name: hidden-city-config
+            - secretRef:
+                name: hidden-city-secrets
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"

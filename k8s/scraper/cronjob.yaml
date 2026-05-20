@@ -1,0 +1,37 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: travelpayouts-scraper
+  namespace: hidden-city
+  labels:
+    app: scraper
+spec:
+  schedule: "0 */6 * * *"  # every 6 hours, matches Travelpayouts 48h cache cycle
+  concurrencyPolicy: Forbid  # never run two scrape jobs at once
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: scraper
+        spec:
+          containers:
+            - name: scraper
+              image: hidden-city:latest
+              imagePullPolicy: IfNotPresent
+              command: ["python", "-m", "src.scraper.run"]
+              envFrom:
+                - configMapRef:
+                    name: hidden-city-config
+                - secretRef:
+                    name: hidden-city-secrets
+              resources:
+                requests:
+                  memory: "128Mi"
+                  cpu: "100m"
+                limits:
+                  memory: "256Mi"
+                  cpu: "200m"
+          restartPolicy: OnFailure

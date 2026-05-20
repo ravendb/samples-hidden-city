@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hidden-city-config
+  namespace: hidden-city
+data:
+  RAVENDB_URL: "http://ravendb-cluster-svc:8080"
+  RAVENDB_DATABASE: "hidden-city"
+  LLM_MODEL: "claude-sonnet-4-20250514"
+  MAX_TOKENS_BUDGET: "1500"
