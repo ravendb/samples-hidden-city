@@ -18,6 +18,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from pyravendb.commands.commands_data import PutDocumentCommand
+from pyravendb.raven_operations.server_operations import CreateDatabaseOperation
 from src.db.client import get_store
 from src.db.models import (
     AirportDocument,
@@ -74,18 +76,19 @@ def seed_airports(store) -> int:
     data_path = Path(__file__).parent.parent / "data" / "airports.json"
     airports = json.loads(data_path.read_text())
 
-    with store.open_session() as session:
-        for raw in airports:
-            doc = AirportDocument(
-                iata=raw["iata"],
-                name=raw["name"],
-                city=raw["city"],
-                country=raw["country"],
-                coordinates=Coordinates(**raw["coordinates"]),
-                nearby=[NearbyAirport(**n) for n in raw.get("nearby", [])],
-            )
-            session.store(doc.model_dump(), doc.airport_id())
-        session.save_changes()
+    request_executor = store.get_request_executor()
+    for raw in airports:
+        doc = AirportDocument(
+            iata=raw["iata"],
+            name=raw["name"],
+            city=raw["city"],
+            country=raw["country"],
+            coordinates=Coordinates(**raw["coordinates"]),
+            nearby=[NearbyAirport(**n) for n in raw.get("nearby", [])],
+        )
+        data = doc.model_dump()
+        data["@metadata"] = {"@collection": "Airports"}
+        request_executor.execute(PutDocumentCommand(key=doc.airport_id(), document=data))
 
     log.info("Seeded %d airports", len(airports))
     return len(airports)
@@ -111,17 +114,33 @@ def seed_routes(store) -> int:
     hidden_count = sum(1 for r in enriched if r.hidden_city_score > 0.5)
     log.info("Hidden city candidates found: %d", hidden_count)
 
-    with store.bulk_insert() as bulk:
-        for route in enriched:
-            bulk.store(route.model_dump(), route.route_id())
+    request_executor = store.get_request_executor()
+    for route in enriched:
+        data = route.model_dump()
+        data["@metadata"] = {"@collection": "Routes"}
+        request_executor.execute(PutDocumentCommand(key=route.route_id(), document=data))
 
     log.info("Seeded %d routes", len(enriched))
     return len(enriched)
 
 
+def ensure_database(store) -> None:
+    db_name = os.environ["RAVENDB_DATABASE"]
+    try:
+        store.maintenance.server.send(CreateDatabaseOperation(db_name))
+        log.info("Created database '%s'", db_name)
+    except Exception as e:
+        msg = str(e).lower()
+        if "already exist" in msg or "concurrency" in msg:
+            log.info("Database '%s' already exists", db_name)
+        else:
+            raise
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     store = get_store()
+    ensure_database(store)
     seed_airports(store)
     seed_routes(store)
     log.info("Done — open http://localhost:8080 to inspect")
