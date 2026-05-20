@@ -233,12 +233,23 @@ uv pip list                       # list installed packages
 
 ### Local (docker-compose)
 
+The fastest way is the included start script — it handles `.env`, RavenDB health
+checks, seeding, and launching the agent in one command:
+
+```powershell
+.\start.ps1             # RavenDB + seed + agent
+.\start.ps1 -Worker     # also starts the price-drop worker in a separate window
+.\start.ps1 -SkipSeed   # skip seeding when the database is already populated
+```
+
+Or step by step:
+
 ```bash
 # 1. Copy environment variables file (only needed once)
 cp .env.example .env
 
 # 2. Start RavenDB
-docker-compose up -d ravendb
+docker compose up -d ravendb
 
 # 3. Seed airports and fixture routes
 uv run python -m scripts.seed_local
