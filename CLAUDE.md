@@ -50,13 +50,13 @@ inference pod (which is also in-cluster via LLM-d/vLLM).
 ## Stack
 
 - **Runtime**: Kubernetes (k8s)
-- **Inference**: LLM-d + vLLM (prefill/decode disaggregation, GPU-targeted)
 - **Database**: RavenDB — documents + vector search + attachments in one product
 - **Operator**: RavenDB Kubernetes Operator (`RavenDBCluster` CRD)
+- **Agent**: Python + FastAPI
 - **ETL**: RavenDB Subscriptions (Kafka only if multi-source ingestion needed)
-- **Flight API**: Amadeus (sandbox for dev, production for prod)
-- **Language**: Python (ETL, agent, tools), C# or Python (RavenDB client)
-- **LLM**: claude-sonnet-4-20250514 via Anthropic API (or self-hosted via LLM-d)
+- **Flight APIs**: Kiwi Tequila (live search, hidden city), Amadeus (direct prices, 400+ airlines), Travelpayouts (bulk cached prices, scraped every 6h)
+- **Language**: Python (agent, tools, scraper, worker), C# or Python (RavenDB client)
+- **LLM**: claude-sonnet-4-20250514 via Anthropic API — only the user prompt goes outbound
 
 ## Repo Structure
 
@@ -69,15 +69,15 @@ inference pod (which is also in-cluster via LLM-d/vLLM).
 ├── k8s/
 │   ├── operator/             # RavenDBCluster CRD + operator install
 │   ├── ravendb/              # RavenDBCluster manifest
-│   ├── llm-d/                # Inference pod config (prefill + decode)
-│   ├── etl/                  # Amadeus ETL job
-│   └── agent/                # Chat agent deployment
+│   ├── scraper/              # CronJob: Travelpayouts → RavenDB bulk (every 6h)
+│   ├── worker/               # Subscription worker: price drop push alerts
+│   └── agent/                # FastAPI agent deployment
 ├── src/
-│   ├── etl/                  # Amadeus → RavenDB pipeline
-│   ├── agent/                # LLM agent + tool definitions
-│   ├── tools/                # RavenDB tool implementations
-│   ├── memory/               # Conversation memory (RavenDB-backed)
-│   ├── hidden_city/          # Hidden city detection logic
+│   ├── scraper/              # Travelpayouts bulk ingest (CronJob)
+│   ├── worker/               # RavenDB subscription listener + alert push
+│   ├── agent/                # FastAPI app + LLM agent loop
+│   ├── tools/                # Tool implementations (search_routes, get_live_price, …)
+│   ├── hidden_city/          # Hidden city scoring logic
 │   └── chat/                 # Chat UI
 └── tests/
     ├── unit/
@@ -237,13 +237,16 @@ before any damage is done.
 
 Contact Omer for operator internals — he wrote it.
 
-## LLM-d Configuration
+## LLM Configuration
 
-- Prefill pods: scale based on prompt size (stays small because context is filtered)
-- Decode pods: scale based on concurrent users
-- Target GPU: point llm-d at the GPU node pool via `nodeSelector` / tolerations
-- Model: do not switch models mid-session (breaks conversation continuity)
-- Max tokens into model: 1500 (system + user + all tool results combined)
+- **Model**: `claude-sonnet-4-20250514` via Anthropic API
+- **What goes outbound**: system prompt + user message only — no context payload
+- **Context delivery**: via tool results returned in the same API call, never pre-injected
+- Do not switch models mid-session (breaks conversation continuity)
+- Max tokens into the API call: 1500 (system + user + all tool results combined)
+
+If you have a GPU in the cluster and want zero-egress inference, llm-d/vLLM is
+the drop-in replacement — the agent tool interface does not change.
 
 ## Token Budget per Request
 
@@ -300,26 +303,29 @@ Conversation state is a RavenDB document (`sessions/...`), not pod RAM, not Redi
 
 ## Key Metrics to Track (Demo)
 
-| Metric                     | Naive baseline          | With RavenDB in-cluster    |
-|----------------------------|-------------------------|----------------------------|
-| Tokens per call            | 40k–100k                | ~1500                      |
-| Egress per retrieval call  | Full payload leaves cluster | Zero (local query)     |
-| Cost at 10k requests/day   | Measure and show        | Measure and show           |
-| Prefill time               | Baseline                | With LLM-d disaggregation  |
-| p95 latency (retrieval)    | External API RTT        | In-cluster query time      |
+| Metric                        | Naive baseline               | With RavenDB in-cluster     |
+|-------------------------------|------------------------------|-----------------------------|
+| Tokens per API call           | 40k–100k                     | ~1500                       |
+| Anthropic API cost/day (10k)  | Calculate and show on screen | Calculate and show on screen|
+| Retrieval egress              | Full payload leaves cluster  | Zero (local RavenDB query)  |
+| p95 latency (retrieval)       | External API round trip      | In-cluster query time       |
+| Cache hit rate                | N/A                          | Measure after 24h of data   |
 
 See @scripts/measure_tokens.py and @scripts/measure_egress.py for tooling.
 
 ## Evolutionary Narrative (Demo Script Context)
 
 The presentation shows the same use case rebuilt across three eras — each with a
-cost breakdown. RavenDB appears as the final step, not the starting assumption.
+concrete cost breakdown. RavenDB appears as the final step, not the starting
+assumption. LLM inference stays external (Anthropic API) throughout all three
+stages — the savings come from what we stop sending, not from where inference runs.
 
-1. **No k8s, naive DB** — fat context payloads, external API, high egress + token cost
-2. **K8s, still external DB** — containerized but retrieval still crosses cluster boundary
-3. **K8s + RavenDB in-cluster via Operator** — retrieval is local, egress goes to near-zero
+1. **No k8s, naive DB** — full Amadeus response stuffed into every prompt, paying for 100k tokens/call, high Anthropic bill
+2. **K8s, still external DB** — containerized but retrieval still crosses cluster boundary on every request
+3. **K8s + RavenDB in-cluster via Operator** — retrieval is local, 1500 tokens/call to Anthropic, near-zero egress on context
 
-Each stage is costed. The closing slide leaves the architecture choice open:
-"The data is already there. The Operator makes sure it stays there."
+Each stage is costed live. The closing slide leaves the architecture open:
+"We kept inference external to show you the savings are purely about context —
+if you have a GPU in your cluster, llm-d takes it the rest of the way."
 
 See @docs/architecture.md for per-stage cost estimates and diagrams.
