@@ -1,0 +1,19 @@
+services:
+  ravendb:
+    image: ravendb/ravendb:latest
+    ports:
+      - "8080:8080"
+      - "38888:38888"
+    environment:
+      RAVEN_ARGS: "--Setup.Mode=None"
+      RAVEN_Security_UnsecuredAccessAllowed: "PrivateNetwork"
+    volumes:
+      - ravendb-data:/var/lib/ravendb/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/alive"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  ravendb-data:
