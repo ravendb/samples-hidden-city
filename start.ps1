@@ -27,11 +27,16 @@ function Write-Warn($msg) {
 
 $totalSteps = if ($SkipSeed) { 2 } else { 3 }
 
-# --- step 0: .env ---
+# --- step 0: .env + license ---
 if (-not (Test-Path "$root\.env")) {
     Write-Warn ".env not found — copying from .env.example"
     Copy-Item "$root\.env.example" "$root\.env"
     Write-Warn "Fill in API keys in .env if you need live flight search."
+}
+
+if (-not (Test-Path "$root\license.json")) {
+    Write-Warn "license.json not found — RavenDB will run in Developer mode (3 GB limit, 1 node)."
+    Write-Warn "To use your license: save the license JSON to license.json in the repo root."
 }
 
 # --- step 1: RavenDB ---
