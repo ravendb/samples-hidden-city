@@ -91,7 +91,8 @@ and when. Nothing is blindly injected. Only the user's prompt leaves the cluster
 ```bash
 # Local dev
 docker-compose up -d ravendb
-python src/etl/run.py --env dev
+python -m scripts.seed_local          # seed airports + fixture routes
+uvicorn src.agent.app:app --reload    # start agent on :8000
 
 # Check operator + cluster state
 kubectl get ravendbclusters
