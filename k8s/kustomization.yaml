@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: hidden-city
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - ravendb/ravendb-cluster.yaml
+  - agent/deployment.yaml
+  - agent/service.yaml
+  - scraper/cronjob.yaml
+  - worker/deployment.yaml
+
+# secrets.yaml is a template only — apply secrets.local.yaml manually:
+#   cp k8s/secrets.yaml k8s/secrets.local.yaml
+#   vim k8s/secrets.local.yaml          # fill in real values
+#   kubectl apply -f k8s/secrets.local.yaml

@@ -99,8 +99,10 @@ kubectl get ravendbclusters
 kubectl describe ravendbclusters ravendb-cluster
 
 # Deploy everything
-kubectl apply -f k8s/operator/
-kubectl apply -f k8s/
+bash k8s/operator/install.sh            # install RavenDB operator (once)
+cp k8s/secrets.yaml k8s/secrets.local.yaml && vim k8s/secrets.local.yaml
+kubectl apply -f k8s/secrets.local.yaml  # secrets applied separately, not in kustomize
+kubectl apply -k k8s/                   # apply everything else via kustomize
 
 # Run tests
 pytest tests/unit/
