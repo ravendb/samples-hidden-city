@@ -131,7 +131,7 @@ Competing stacks need a separate vector DB + document DB + blob store.
 }
 ```
 
-**Conversation session** (durable agent memory, survives pod restarts):
+**Conversation session** (durable, survives pod restarts, partially queryable):
 
 ```json
 {
@@ -145,6 +145,11 @@ Competing stacks need a separate vector DB + document DB + blob store.
   "last_active": "2025-05-20T10:05:00Z"
 }
 ```
+
+Stored as a document (not attachment) so `active_constraints` and `last_active`
+are indexable and the agent can retrieve only last N turns without reading the
+full history. Binary user data (passport, photos, bag files) lives as attachments
+on the separate `users/...` document.
 
 **Airport document** (static):
 
@@ -169,9 +174,10 @@ separate vector DB needed.
 
 ### Attachments
 
-User profile attached to the user document: passport scan (for name/nationality
-validation), saved preferences, loyalty program numbers. Stored as RavenDB
-attachments — binary blobs alongside the document, managed by the same Operator.
+Binary blobs stored on the user document: passport scan (PDF/image, for
+name/nationality display), profile photo, carry-on bag dimensions file, exported
+preference sheets. Stored as RavenDB attachments — not queryable, not indexed,
+retrieved whole via `get_user_profile` tool.
 
 ## RavenDB as Agent Tool
 
@@ -254,12 +260,13 @@ The naive baseline (raw Amadeus response in prompt) runs 40k–100k tokens per c
 
 ## Conversation Memory
 
-Conversation state is stored in RavenDB, not in pod RAM and not in Redis.
+Conversation state is a RavenDB document (`sessions/...`), not pod RAM, not Redis.
 
-- Session documents persist across pod restarts (demo: kill the agent pod, query continues)
-- Active constraints from earlier in the conversation are carried forward automatically
-- The `get_conversation` tool is called at the start of each turn — the model
-  receives only the last N turns + extracted constraints, not the full raw history
+- Persists across pod restarts — demo beat: kill the agent pod mid-conversation, query resumes
+- `active_constraints` (carry-on only, max stops, etc.) are indexed fields, not buried in turn text
+- `save_conversation` tool appends each turn after the model responds
+- At the start of each turn the agent reads last N turns + `active_constraints` only — never the full raw history
+- Binary user data (passport scan, bag photo) lives as attachments on `users/...` document, fetched whole by `get_user_profile`
 
 ## Code Style
 
