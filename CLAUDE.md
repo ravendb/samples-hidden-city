@@ -180,14 +180,16 @@ The model must call RavenDB explicitly as a tool — it decides what to fetch.
 
 ### Tool Definitions (`src/tools/`)
 
-| Tool                    | Description                                                        |
-|-------------------------|--------------------------------------------------------------------|
-| `search_routes`         | Full-text + range query: origin, destination, date, stops, price   |
-| `find_similar_routes`   | Vector search: semantic similarity to a described route            |
-| `get_conversation`      | Retrieve session history and active constraints for current user   |
-| `save_preference`       | Persist a user preference (carry-on only, seat class, etc.)        |
-| `watch_price`           | Register a RavenDB Subscription for price change notifications     |
-| `check_hidden_city`     | Score a given A→B→C itinerary against stored hidden city patterns  |
+| Tool                 | Description                                                              |
+|----------------------|--------------------------------------------------------------------------|
+| `search_routes`      | Vector + doc query against RavenDB: origin, dest, date, stops, price, semantic similarity |
+| `get_live_price`     | Live call to Kiwi Tequila (hidden city) or Amadeus (direct) on cache miss |
+| `get_user_profile`   | Read user profile and preferences from RavenDB attachments               |
+| `save_conversation`  | Persist the current turn to RavenDB after each exchange                  |
+
+Hidden city scoring and semantic similarity are not separate tools — they are
+logic inside `search_routes` (vector query handles similarity; hidden city score
+is a field on the route document, filtered at query time).
 
 ### What Goes Outbound
 
