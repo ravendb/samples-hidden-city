@@ -1,0 +1,159 @@
+[
+  {
+    "iata": "WAW",
+    "name": "Warsaw Chopin",
+    "city": "Warsaw",
+    "country": "PL",
+    "coordinates": { "lat": 52.1657, "lng": 20.9671 },
+    "nearby": [
+      { "iata": "WMI", "distance_km": 35, "train": false },
+      { "iata": "KTW", "distance_km": 280, "train": true },
+      { "iata": "KRK", "distance_km": 290, "train": true }
+    ]
+  },
+  {
+    "iata": "KTW",
+    "name": "Katowice Pyrzowice",
+    "city": "Katowice",
+    "country": "PL",
+    "coordinates": { "lat": 50.4743, "lng": 19.0800 },
+    "nearby": [
+      { "iata": "KRK", "distance_km": 80, "train": true },
+      { "iata": "WAW", "distance_km": 280, "train": true },
+      { "iata": "WRO", "distance_km": 170, "train": true }
+    ]
+  },
+  {
+    "iata": "KRK",
+    "name": "Krakow John Paul II",
+    "city": "Krakow",
+    "country": "PL",
+    "coordinates": { "lat": 50.0777, "lng": 19.7848 },
+    "nearby": [
+      { "iata": "KTW", "distance_km": 80, "train": true },
+      { "iata": "WAW", "distance_km": 290, "train": true }
+    ]
+  },
+  {
+    "iata": "LHR",
+    "name": "London Heathrow",
+    "city": "London",
+    "country": "GB",
+    "coordinates": { "lat": 51.4700, "lng": -0.4543 },
+    "nearby": [
+      { "iata": "LGW", "distance_km": 44, "train": true },
+      { "iata": "STN", "distance_km": 60, "train": true },
+      { "iata": "LTN", "distance_km": 52, "train": true }
+    ]
+  },
+  {
+    "iata": "LGW",
+    "name": "London Gatwick",
+    "city": "London",
+    "country": "GB",
+    "coordinates": { "lat": 51.1537, "lng": -0.1821 },
+    "nearby": [
+      { "iata": "LHR", "distance_km": 44, "train": true },
+      { "iata": "STN", "distance_km": 86, "train": true }
+    ]
+  },
+  {
+    "iata": "FRA",
+    "name": "Frankfurt Main",
+    "city": "Frankfurt",
+    "country": "DE",
+    "coordinates": { "lat": 50.0379, "lng": 8.5622 },
+    "nearby": [
+      { "iata": "HHN", "distance_km": 120, "train": false },
+      { "iata": "CGN", "distance_km": 190, "train": true }
+    ]
+  },
+  {
+    "iata": "AMS",
+    "name": "Amsterdam Schiphol",
+    "city": "Amsterdam",
+    "country": "NL",
+    "coordinates": { "lat": 52.3086, "lng": 4.7639 },
+    "nearby": [
+      { "iata": "EIN", "distance_km": 120, "train": true }
+    ]
+  },
+  {
+    "iata": "CDG",
+    "name": "Paris Charles de Gaulle",
+    "city": "Paris",
+    "country": "FR",
+    "coordinates": { "lat": 49.0097, "lng": 2.5479 },
+    "nearby": [
+      { "iata": "ORY", "distance_km": 35, "train": true },
+      { "iata": "BVA", "distance_km": 85, "train": true }
+    ]
+  },
+  {
+    "iata": "IST",
+    "name": "Istanbul Airport",
+    "city": "Istanbul",
+    "country": "TR",
+    "coordinates": { "lat": 41.2753, "lng": 28.7519 },
+    "nearby": [
+      { "iata": "SAW", "distance_km": 60, "train": false }
+    ]
+  },
+  {
+    "iata": "DOH",
+    "name": "Hamad International",
+    "city": "Doha",
+    "country": "QA",
+    "coordinates": { "lat": 25.2731, "lng": 51.6086 },
+    "nearby": []
+  },
+  {
+    "iata": "DXB",
+    "name": "Dubai International",
+    "city": "Dubai",
+    "country": "AE",
+    "coordinates": { "lat": 25.2532, "lng": 55.3657 },
+    "nearby": [
+      { "iata": "AUH", "distance_km": 130, "train": false }
+    ]
+  },
+  {
+    "iata": "JFK",
+    "name": "New York JFK",
+    "city": "New York",
+    "country": "US",
+    "coordinates": { "lat": 40.6413, "lng": -73.7781 },
+    "nearby": [
+      { "iata": "EWR", "distance_km": 24, "train": true },
+      { "iata": "LGA", "distance_km": 18, "train": false }
+    ]
+  },
+  {
+    "iata": "EWR",
+    "name": "Newark Liberty",
+    "city": "New York",
+    "country": "US",
+    "coordinates": { "lat": 40.6895, "lng": -74.1745 },
+    "nearby": [
+      { "iata": "JFK", "distance_km": 24, "train": true }
+    ]
+  },
+  {
+    "iata": "ORD",
+    "name": "Chicago O'Hare",
+    "city": "Chicago",
+    "country": "US",
+    "coordinates": { "lat": 41.9742, "lng": -87.9073 },
+    "nearby": [
+      { "iata": "MDW", "distance_km": 28, "train": true }
+    ]
+  },
+  {
+    "iata": "BOS",
+    "name": "Boston Logan",
+    "city": "Boston",
+    "country": "US",
+    "coordinates": { "lat": 42.3656, "lng": -71.0096 },
+    "nearby": []
+  }
+]
