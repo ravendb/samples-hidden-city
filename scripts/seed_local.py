@@ -55,6 +55,14 @@ FIXTURE_ROUTES = [
     # WAW→DXB via IST: 130 vs 260 direct to IST → 50% savings → score ≈ 0.50
     {"origin": "WAW", "destination": "DXB", "hubs": ["IST", "DOH"], "price_min": 130, "price_max": 200},
     {"origin": "WAW", "destination": "EWR", "hubs": ["LHR", "AMS"], "price_min": 230, "price_max": 330},
+    # Asia routes via Gulf/IST hubs — hidden city candidates for IST
+    # WAW→IST direct: 260.  WAW→CKG via IST: 110 → 58% savings → score ≈ 0.58 ✓
+    # WAW→IST direct: 260.  WAW→PVG via IST: 115 → 56% savings → score ≈ 0.56 ✓
+    # WAW→IST direct: 260.  WAW→PEK via IST: 108 → 58% savings → score ≈ 0.58 ✓
+    # (DOH is a second hub leg but IST gives the best savings — enricher picks highest score)
+    {"origin": "WAW", "destination": "CKG", "hubs": ["IST", "DOH"], "price_min": 110, "price_max": 175},
+    {"origin": "WAW", "destination": "PVG", "hubs": ["IST", "DOH"], "price_min": 115, "price_max": 180},
+    {"origin": "WAW", "destination": "PEK", "hubs": ["IST"], "price_min": 108, "price_max": 170},
     # Katowice routes
     {"origin": "KTW", "destination": "LHR", "hubs": [], "price_min": 560, "price_max": 700},
     {"origin": "KTW", "destination": "JFK", "hubs": ["FRA", "AMS"], "price_min": 165, "price_max": 260},

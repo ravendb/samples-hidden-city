@@ -56,7 +56,7 @@ TEST_QUERIES = [
 
 async def run() -> None:
     async with httpx.AsyncClient(base_url=AGENT_URL, timeout=60.0) as client:
-        client.get("/health").raise_for_status()
+        (await client.get("/health")).raise_for_status()
 
         print("\n=== Egress Measurement Report ===\n")
         print(
