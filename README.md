@@ -266,16 +266,20 @@ in local mode. Open the `Routes` collection to inspect enriched documents.
 
 ### Environment variables
 
-Copy `.env.example` to `.env` and fill in:
+`start.ps1` copies `.env.example` to `.env` automatically and prompts for any
+missing keys on first run. You can also fill them in manually:
 
-```
-RAVENDB_URL=http://localhost:8080
-RAVENDB_DATABASE=HiddenCity
-ANTHROPIC_API_KEY=sk-...
-KIWI_API_KEY=...          # optional — only for live price lookup
-AMADEUS_CLIENT_ID=...     # optional — only for live price lookup
-AMADEUS_CLIENT_SECRET=... # optional — only for live price lookup
-```
+| Variable | Required | Where to get it |
+|----------|----------|-----------------|
+| `ANTHROPIC_API_KEY` | **Yes** — agent won't start without it | [console.anthropic.com](https://console.anthropic.com/) → API Keys |
+| `KIWI_API_KEY` | No — fixture data used as fallback | [tequila.kiwi.com](https://tequila.kiwi.com/) → register, free tier available |
+| `AMADEUS_CLIENT_ID` + `AMADEUS_CLIENT_SECRET` | No — fixture data used as fallback | [developers.amadeus.com](https://developers.amadeus.com/) → My Apps → create app, free test tier |
+| `TRAVELPAYOUTS_TOKEN` | No — only needed for bulk scraper CronJob | [travelpayouts.com](https://www.travelpayouts.com/) → developer tools |
+| `RAVENDB_URL` | Yes | `http://localhost:8080` for local dev (already set in `.env.example`) |
+| `RAVENDB_DATABASE` | Yes | `hidden-city` (already set in `.env.example`) |
+
+Without `KIWI_API_KEY` and Amadeus credentials the agent falls back to fixture
+data seeded by `scripts/seed_local.py`. All demo scenarios work on fixture data.
 
 Without Kiwi/Amadeus keys the agent uses fixture data seeded by `seed_local.py`.
 
