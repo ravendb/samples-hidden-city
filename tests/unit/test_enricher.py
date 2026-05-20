@@ -15,9 +15,10 @@ def make_route(origin: str, destination: str, price_min: float, hubs: list[str] 
 
 class TestEnrichHiddenCity:
     def test_detects_hidden_city_candidate(self):
+        # LHR direct=600, JFK-via-LHR=220 → 63% savings → score=0.63 > 0.5
         routes = [
-            make_route("WAW", "LHR", price_min=310.0),         # direct, expensive
-            make_route("WAW", "JFK", price_min=185.0, hubs=["LHR"]),  # via LHR, cheap
+            make_route("WAW", "LHR", price_min=600.0),
+            make_route("WAW", "JFK", price_min=220.0, hubs=["LHR"]),
         ]
         enriched = enrich_hidden_city(routes)
 
@@ -28,8 +29,8 @@ class TestEnrichHiddenCity:
 
     def test_direct_route_not_flagged(self):
         routes = [
-            make_route("WAW", "LHR", price_min=310.0),
-            make_route("WAW", "JFK", price_min=185.0, hubs=["LHR"]),
+            make_route("WAW", "LHR", price_min=600.0),
+            make_route("WAW", "JFK", price_min=220.0, hubs=["LHR"]),
         ]
         enriched = enrich_hidden_city(routes)
 
@@ -53,16 +54,18 @@ class TestEnrichHiddenCity:
         assert enriched[0].hidden_city_score == 0.0
 
     def test_best_candidate_wins_when_multiple_hubs(self):
+        # BOS-via-LHR saves 63% vs LHR direct (600→220)
+        # BOS-via-FRA saves 0% vs FRA direct (90→220, actually more expensive — skipped)
+        # LHR hub gives better score → should win
         routes = [
             make_route("WAW", "FRA", price_min=90.0),
-            make_route("WAW", "LHR", price_min=310.0),
-            # BOS has two hub options: LHR saves more than FRA
-            make_route("WAW", "BOS", price_min=195.0, hubs=["LHR", "FRA"]),
+            make_route("WAW", "LHR", price_min=600.0),
+            make_route("WAW", "BOS", price_min=220.0, hubs=["LHR", "FRA"]),
         ]
         enriched = enrich_hidden_city(routes)
         bos = next(r for r in enriched if r.destination == "BOS")
 
-        # LHR direct is 310, FRA direct is 90; LHR gives bigger savings (115 vs -105)
+        # LHR: savings = 380, score ≈ 0.63. FRA: hidden (220) > direct (90) → score = 0
         assert bos.hidden_city_via == "LHR"
 
     def test_empty_input(self):
@@ -70,7 +73,7 @@ class TestEnrichHiddenCity:
 
     def test_output_length_matches_input(self):
         routes = [
-            make_route("WAW", "LHR", price_min=310.0),
-            make_route("WAW", "JFK", price_min=185.0, hubs=["LHR"]),
+            make_route("WAW", "LHR", price_min=600.0),
+            make_route("WAW", "JFK", price_min=220.0, hubs=["LHR"]),
         ]
         assert len(enrich_hidden_city(routes)) == len(routes)

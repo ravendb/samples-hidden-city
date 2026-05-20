@@ -40,7 +40,7 @@ def enrich_hidden_city(routes: list[RouteDocument]) -> list[RouteDocument]:
                 risks=[],
             )
 
-            if candidate.should_surface and candidate.score > best_score:
+            if candidate.score > best_score:
                 best_score = candidate.score
                 best_via = hub
                 best_decoy = route.destination

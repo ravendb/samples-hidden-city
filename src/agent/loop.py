@@ -80,8 +80,10 @@ async def run_agent(
         if response.stop_reason == "end_turn":
             text = next(
                 (b.text for b in response.content if b.type == "text"),
-                "",
+                None,
             )
+            if text is None:
+                raise ValueError("Anthropic returned end_turn with no text block")
             return AgentResult(
                 response=text,
                 input_tokens=total_input,

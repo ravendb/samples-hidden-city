@@ -37,23 +37,28 @@ log = logging.getLogger(__name__)
 #   WAW→ORD (via FRA) cheaper than WAW→FRA direct  → FRA hidden city
 #   WAW→DOH (via IST) cheaper than WAW→IST direct  → IST hidden city
 FIXTURE_ROUTES = [
-    # Direct routes (expensive, no hubs)
-    {"origin": "WAW", "destination": "LHR", "hubs": [], "price_min": 310, "price_max": 420},
-    {"origin": "WAW", "destination": "FRA", "hubs": [], "price_min": 85, "price_max": 130},
-    {"origin": "WAW", "destination": "AMS", "hubs": [], "price_min": 75, "price_max": 110},
-    {"origin": "WAW", "destination": "IST", "hubs": [], "price_min": 140, "price_max": 200},
-    {"origin": "WAW", "destination": "CDG", "hubs": [], "price_min": 95, "price_max": 140},
-    # Connecting routes (cheap, with hubs → hidden city candidates)
-    {"origin": "WAW", "destination": "JFK", "hubs": ["LHR"], "price_min": 185, "price_max": 280},
-    {"origin": "WAW", "destination": "BOS", "hubs": ["LHR", "FRA"], "price_min": 195, "price_max": 290},
-    {"origin": "WAW", "destination": "ORD", "hubs": ["FRA", "AMS"], "price_min": 200, "price_max": 300},
-    {"origin": "WAW", "destination": "DOH", "hubs": ["IST"], "price_min": 115, "price_max": 165},
-    {"origin": "WAW", "destination": "DXB", "hubs": ["IST", "DOH"], "price_min": 120, "price_max": 175},
-    {"origin": "WAW", "destination": "EWR", "hubs": ["LHR", "AMS"], "price_min": 190, "price_max": 285},
-    # Katowice routes (nearby alternative origin)
-    {"origin": "KTW", "destination": "LHR", "hubs": [], "price_min": 290, "price_max": 400},
-    {"origin": "KTW", "destination": "JFK", "hubs": ["FRA", "AMS"], "price_min": 195, "price_max": 295},
-    {"origin": "KTW", "destination": "FRA", "hubs": [], "price_min": 70, "price_max": 110},
+    # Direct routes — realistic prices, used as baseline for hidden city comparison
+    {"origin": "WAW", "destination": "LHR", "hubs": [], "price_min": 580, "price_max": 720},
+    {"origin": "WAW", "destination": "FRA", "hubs": [], "price_min": 380, "price_max": 480},
+    {"origin": "WAW", "destination": "AMS", "hubs": [], "price_min": 320, "price_max": 420},
+    {"origin": "WAW", "destination": "IST", "hubs": [], "price_min": 260, "price_max": 340},
+    {"origin": "WAW", "destination": "CDG", "hubs": [], "price_min": 340, "price_max": 440},
+    # Connecting routes — hidden city candidates (score > 0.5 after enrichment)
+    # WAW→JFK via LHR: 220 vs 580 direct to LHR → 62% savings → score ≈ 0.62
+    {"origin": "WAW", "destination": "JFK", "hubs": ["LHR"], "price_min": 220, "price_max": 320},
+    # WAW→BOS via LHR: 240 vs 580 direct to LHR → 59% savings → score ≈ 0.59
+    {"origin": "WAW", "destination": "BOS", "hubs": ["LHR", "FRA"], "price_min": 240, "price_max": 340},
+    # WAW→ORD via FRA: 155 vs 380 direct to FRA → 59% savings → score ≈ 0.59
+    {"origin": "WAW", "destination": "ORD", "hubs": ["FRA", "AMS"], "price_min": 155, "price_max": 240},
+    # WAW→DOH via IST: 120 vs 260 direct to IST → 54% savings → score ≈ 0.54
+    {"origin": "WAW", "destination": "DOH", "hubs": ["IST"], "price_min": 120, "price_max": 185},
+    # WAW→DXB via IST: 130 vs 260 direct to IST → 50% savings → score ≈ 0.50
+    {"origin": "WAW", "destination": "DXB", "hubs": ["IST", "DOH"], "price_min": 130, "price_max": 200},
+    {"origin": "WAW", "destination": "EWR", "hubs": ["LHR", "AMS"], "price_min": 230, "price_max": 330},
+    # Katowice routes
+    {"origin": "KTW", "destination": "LHR", "hubs": [], "price_min": 560, "price_max": 700},
+    {"origin": "KTW", "destination": "JFK", "hubs": ["FRA", "AMS"], "price_min": 165, "price_max": 260},
+    {"origin": "KTW", "destination": "FRA", "hubs": [], "price_min": 360, "price_max": 460},
 ]
 
 
