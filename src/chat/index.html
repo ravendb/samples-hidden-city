@@ -14,11 +14,11 @@
     --surface: #1a1d27;
     --surface2: #252836;
     --border: #2e3347;
-    --accent: #f97316;
-    --accent2: #3b82f6;
+    --accent: #3b82f6;
+    --accent2: #60a5fa;
     --text: #e2e8f0;
     --text-muted: #64748b;
-    --hidden-city: #f97316;
+    --hidden-city: #ffffff;
     --regular: #3b82f6;
     --radius: 8px;
     --font: 'Inter', system-ui, sans-serif;
@@ -256,7 +256,7 @@ async function loadMap() {
     const isHC = score > 0.5;
     const pts = gcArc(a.lat, a.lng, b.lat, b.lng);
     L.polyline(pts, {
-      color: isHC ? '#f97316' : '#3b82f6',
+      color: isHC ? '#ffffff' : '#3b82f6',
       weight: isHC ? 1.8 : 1,
       opacity: isHC ? 0.7 : 0.35,
       dashArray: isHC ? null : '4 6',
@@ -301,7 +301,7 @@ function updateTokenBar(total) {
   document.getElementById('token-progress').style.width = pct + '%';
   document.getElementById('token-count').textContent = `${total.toLocaleString()} / ${TOKEN_BUDGET.toLocaleString()}`;
   document.getElementById('token-progress').style.background =
-    pct > 90 ? '#ef4444' : pct > 70 ? '#eab308' : '#f97316';
+    pct > 90 ? '#ef4444' : pct > 70 ? '#eab308' : '#3b82f6';
 }
 
 // ---- Chat ----
