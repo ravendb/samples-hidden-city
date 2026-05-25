@@ -11,7 +11,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from src.db.client import get_store
+from src.db.client import doc_to_dict, get_store
 from src.hidden_city.scorer import RiskFactor, score_candidate
 
 log = logging.getLogger(__name__)
@@ -51,7 +51,7 @@ async def search_routes(
     store = get_store()
 
     with store.open_session() as session:
-        query = session.query(collection="Routes").where_equals("origin", origin.upper())
+        query = session.query(collection_name="Routes").where_equals("origin", origin.upper())
 
         if destination:
             query = query.where_equals("destination", destination.upper())
@@ -60,7 +60,7 @@ async def search_routes(
             query = query.where_equals("hidden_city_via", real_destination.upper())
             query = query.where_greater_than("hidden_city_score", 0.5)
 
-        raw_results = list(query.take(max_results).all())
+        raw_results = [doc_to_dict(r) for r in query.take(max_results)]
 
     routes = []
     for r in raw_results:
@@ -72,6 +72,16 @@ async def search_routes(
             "price_usd": r.get("typical_price", {}),
             "stale": stale,
         }
+        if r.get("depart_date"):
+            route_entry["depart_date"] = r["depart_date"]
+        if r.get("depart_time"):
+            route_entry["depart_time"] = r["depart_time"]
+        if r.get("arrive_time"):
+            route_entry["arrive_time"] = r["arrive_time"]
+        if r.get("duration_avg_min"):
+            h, m = divmod(r["duration_avg_min"], 60)
+            route_entry["duration"] = f"{h}h {m:02d}m" if h else f"{m}m"
+        route_entry["has_schedule"] = bool(r.get("depart_time"))
 
         base_score = r.get("hidden_city_score", 0.0)
         if base_score > 0.5:

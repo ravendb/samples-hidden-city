@@ -7,7 +7,7 @@ they are fetched separately only when explicitly needed.
 """
 import logging
 
-from src.db.client import get_store
+from src.db.client import doc_to_dict, get_store
 
 log = logging.getLogger(__name__)
 
@@ -31,13 +31,14 @@ async def get_user_profile(user_id: str) -> dict:
         log.info("No profile found for user %s, returning defaults", user_id)
         return _DEFAULT_PROFILE
 
+    d = doc_to_dict(doc)
     return {
         "found": True,
         "preferences": {
-            "carry_on_only": doc.get("carry_on_only", False),
-            "max_stops": doc.get("max_stops", 2),
-            "preferred_airlines": doc.get("preferred_airlines", []),
-            "home_airport": doc.get("home_airport"),
-            "loyalty_programs": doc.get("loyalty_programs", []),
+            "carry_on_only": d.get("carry_on_only", False),
+            "max_stops": d.get("max_stops", 2),
+            "preferred_airlines": d.get("preferred_airlines", []),
+            "home_airport": d.get("home_airport"),
+            "loyalty_programs": d.get("loyalty_programs", []),
         },
     }

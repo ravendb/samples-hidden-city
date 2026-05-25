@@ -1,5 +1,5 @@
 """
-Unit tests for the agent loop — Anthropic client is fully mocked.
+Unit tests for the agent loop — OpenAI client is fully mocked.
 """
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,27 +11,29 @@ from src.agent.loop import AgentResult, run_agent
 
 def _make_end_turn_response(text: str, input_tokens: int = 100, output_tokens: int = 50):
     response = MagicMock()
-    response.stop_reason = "end_turn"
-    response.usage.input_tokens = input_tokens
-    response.usage.output_tokens = output_tokens
-    block = MagicMock()
-    block.type = "text"
-    block.text = text
-    response.content = [block]
+    choice = MagicMock()
+    choice.finish_reason = "stop"
+    choice.message.content = text
+    choice.message.tool_calls = None
+    response.choices = [choice]
+    response.usage.prompt_tokens = input_tokens
+    response.usage.completion_tokens = output_tokens
     return response
 
 
-def _make_tool_use_response(tool_name: str, tool_input: dict, tool_id: str = "toolu_01"):
+def _make_tool_use_response(tool_name: str, tool_input: dict, tool_id: str = "call_01"):
     response = MagicMock()
-    response.stop_reason = "tool_use"
-    response.usage.input_tokens = 80
-    response.usage.output_tokens = 30
-    block = MagicMock()
-    block.type = "tool_use"
-    block.name = tool_name
-    block.id = tool_id
-    block.input = tool_input
-    response.content = [block]
+    choice = MagicMock()
+    choice.finish_reason = "tool_calls"
+    choice.message.content = None
+    tc = MagicMock()
+    tc.id = tool_id
+    tc.function.name = tool_name
+    tc.function.arguments = json.dumps(tool_input)
+    choice.message.tool_calls = [tc]
+    response.choices = [choice]
+    response.usage.prompt_tokens = 80
+    response.usage.completion_tokens = 30
     return response
 
 
@@ -40,10 +42,10 @@ class TestRunAgent:
     async def test_end_turn_no_tools(self):
         mock_response = _make_end_turn_response("Here are your flights.")
 
-        with patch("src.agent.loop.anthropic.AsyncAnthropic") as mock_client_cls:
+        with patch("src.agent.loop.AsyncOpenAI") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client_cls.return_value = mock_client
-            mock_client.messages.create = AsyncMock(return_value=mock_response)
+            mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
             result = await run_agent(user_message="Find WAW→LHR", prior_turns=[])
 
@@ -66,12 +68,12 @@ class TestRunAgent:
             return {"routes": [], "count": 0}
 
         with (
-            patch("src.agent.loop.anthropic.AsyncAnthropic") as mock_client_cls,
+            patch("src.agent.loop.AsyncOpenAI") as mock_client_cls,
             patch("src.agent.loop.dispatch_tool", side_effect=mock_dispatch),
         ):
             mock_client = AsyncMock()
             mock_client_cls.return_value = mock_client
-            mock_client.messages.create = AsyncMock(
+            mock_client.chat.completions.create = AsyncMock(
                 side_effect=[tool_response, end_response]
             )
             result = await run_agent(user_message="Find WAW→LHR", prior_turns=[])
@@ -90,10 +92,10 @@ class TestRunAgent:
             captured_messages.extend(kwargs["messages"])
             return end_response
 
-        with patch("src.agent.loop.anthropic.AsyncAnthropic") as mock_client_cls:
+        with patch("src.agent.loop.AsyncOpenAI") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client_cls.return_value = mock_client
-            mock_client.messages.create = capture_create
+            mock_client.chat.completions.create = capture_create
 
             await run_agent(
                 user_message="New question",
@@ -103,9 +105,10 @@ class TestRunAgent:
                 ],
             )
 
-        assert captured_messages[0]["content"] == "Old question"
-        assert captured_messages[1]["content"] == "Old answer"
-        assert captured_messages[2]["content"] == "New question"
+        # messages = [system, prior_user, prior_assistant, new_user]
+        assert captured_messages[1]["content"] == "Old question"
+        assert captured_messages[2]["content"] == "Old answer"
+        assert captured_messages[3]["content"] == "New question"
 
     @pytest.mark.asyncio
     async def test_token_warning_on_large_tool_result(self):
@@ -115,7 +118,7 @@ class TestRunAgent:
         large_result = {"routes": [{"data": "x" * 4000}]}  # ~1000 tokens
 
         with (
-            patch("src.agent.loop.anthropic.AsyncAnthropic") as mock_client_cls,
+            patch("src.agent.loop.AsyncOpenAI") as mock_client_cls,
             patch(
                 "src.agent.loop.dispatch_tool",
                 new=AsyncMock(return_value=large_result),
@@ -123,7 +126,7 @@ class TestRunAgent:
         ):
             mock_client = AsyncMock()
             mock_client_cls.return_value = mock_client
-            mock_client.messages.create = AsyncMock(
+            mock_client.chat.completions.create = AsyncMock(
                 side_effect=[tool_response, end_response]
             )
             result = await run_agent(user_message="Search routes", prior_turns=[])
@@ -135,7 +138,7 @@ class TestRunAgent:
         always_tool = _make_tool_use_response("search_routes", {"origin": "WAW"})
 
         with (
-            patch("src.agent.loop.anthropic.AsyncAnthropic") as mock_client_cls,
+            patch("src.agent.loop.AsyncOpenAI") as mock_client_cls,
             patch(
                 "src.agent.loop.dispatch_tool",
                 new=AsyncMock(return_value={"routes": []}),
@@ -144,7 +147,7 @@ class TestRunAgent:
         ):
             mock_client = AsyncMock()
             mock_client_cls.return_value = mock_client
-            mock_client.messages.create = AsyncMock(return_value=always_tool)
+            mock_client.chat.completions.create = AsyncMock(return_value=always_tool)
 
             with pytest.raises(RuntimeError, match="exceeded"):
                 await run_agent(user_message="Loop forever", prior_turns=[])

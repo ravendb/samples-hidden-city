@@ -271,17 +271,14 @@ missing keys on first run. You can also fill them in manually:
 
 | Variable | Required | Where to get it |
 |----------|----------|-----------------|
-| `ANTHROPIC_API_KEY` | **Yes** — agent won't start without it | [console.anthropic.com](https://console.anthropic.com/) → API Keys |
-| `KIWI_API_KEY` | No — fixture data used as fallback | [tequila.kiwi.com](https://tequila.kiwi.com/) → register, free tier available |
+| `OPENAI_API_KEY` | **Yes** — agent won't start without it | [platform.openai.com](https://platform.openai.com/) → API Keys |
 | `AMADEUS_CLIENT_ID` + `AMADEUS_CLIENT_SECRET` | No — fixture data used as fallback | [developers.amadeus.com](https://developers.amadeus.com/) → My Apps → create app, free test tier |
-| `TRAVELPAYOUTS_TOKEN` | No — only needed for bulk scraper CronJob | [travelpayouts.com](https://www.travelpayouts.com/) → developer tools |
+| `TRAVELPAYOUTS_TOKEN` | No — only needed for bulk scraper CronJob | [app.travelpayouts.com/profile](https://app.travelpayouts.com/profile/) → Aviasales Data API token |
 | `RAVENDB_URL` | Yes | `http://localhost:8080` for local dev (already set in `.env.example`) |
 | `RAVENDB_DATABASE` | Yes | `hidden-city` (already set in `.env.example`) |
 
-Without `KIWI_API_KEY` and Amadeus credentials the agent falls back to fixture
-data seeded by `scripts/seed_local.py`. All demo scenarios work on fixture data.
-
-Without Kiwi/Amadeus keys the agent uses fixture data seeded by `seed_local.py`.
+Without Amadeus credentials the agent falls back to fixture data seeded by
+`scripts/seed_local.py`. All demo scenarios work on fixture data.
 
 ### Kubernetes
 
@@ -328,7 +325,7 @@ Or use the Swagger UI at http://localhost:8000/docs.
 Chongqing (IATA: `CKG`) is not in the fixture data, so the agent will:
 1. Call `search_routes(origin="WAW", destination="CKG")` — returns empty.
 2. Call `get_live_price(origin="WAW", destination="CKG", route_type="hidden_city")`
-   — hits Kiwi Tequila if `KIWI_API_KEY` is set, otherwise returns `found: false`.
+   — hits Amadeus if credentials are set, otherwise returns `found: false`.
 3. Explain that no routes were found and suggest nearby hubs (IST, DOH, DXB are
    common transfer points for Central Asia).
 
@@ -354,7 +351,7 @@ note the checked-baggage risk is eliminated, improving the adjusted score.
 
 ```
 src/
-  agent/          FastAPI app + Anthropic tool-calling loop
+  agent/          FastAPI app + OpenAI tool-calling loop
   tools/          4 MCP-style tools: search_routes, get_live_price,
                   get_user_profile, save_conversation
   db/             RavenDB client + Pydantic models

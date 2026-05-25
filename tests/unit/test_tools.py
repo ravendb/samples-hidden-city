@@ -39,7 +39,7 @@ class TestSearchRoutes:
         mock_query.where_equals.return_value = mock_query
         mock_query.where_greater_than.return_value = mock_query
         mock_query.take.return_value = mock_query
-        mock_query.all = MagicMock(side_effect=lambda: iter(routes))
+        mock_query.__iter__ = MagicMock(side_effect=lambda: iter(routes))
 
         mock_session = MagicMock()
         mock_session.__enter__ = MagicMock(return_value=mock_session)
@@ -158,18 +158,26 @@ class TestSearchRoutes:
 
 
 class TestSaveConversation:
-    @pytest.mark.asyncio
-    async def test_creates_new_session(self):
+    def _make_mock_store(self, existing_doc=None):
         mock_session = MagicMock()
         mock_session.__enter__ = MagicMock(return_value=mock_session)
         mock_session.__exit__ = MagicMock(return_value=False)
-        mock_session.load.return_value = None  # no existing session
+        mock_session.load.return_value = existing_doc
+
         stored_docs = {}
-        mock_session.store = lambda doc, doc_id: stored_docs.update({doc_id: doc})
-        mock_session.save_changes = MagicMock()
+        mock_executor = MagicMock()
+        mock_executor.execute = MagicMock(
+            side_effect=lambda cmd: stored_docs.update({cmd.key: cmd.document})
+        )
 
         mock_store = MagicMock()
         mock_store.open_session.return_value = mock_session
+        mock_store.get_request_executor.return_value = mock_executor
+        return mock_store, stored_docs
+
+    @pytest.mark.asyncio
+    async def test_creates_new_session(self):
+        mock_store, stored_docs = self._make_mock_store(existing_doc=None)
 
         with patch("src.tools.save_conversation.get_store", return_value=mock_store):
             result = await save_conversation(
@@ -181,7 +189,7 @@ class TestSaveConversation:
 
         assert result["saved"] is True
         assert result["total_turns"] == 2  # user + assistant
-        assert mock_session.save_changes.called
+        assert mock_store.get_request_executor().execute.called
         doc = stored_docs["sessions/u1-1"]
         assert len(doc["turns"]) == 2
 
@@ -198,16 +206,7 @@ class TestSaveConversation:
             },
             "last_active": datetime.now(timezone.utc).isoformat(),
         }
-        mock_session = MagicMock()
-        mock_session.__enter__ = MagicMock(return_value=mock_session)
-        mock_session.__exit__ = MagicMock(return_value=False)
-        mock_session.load.return_value = existing
-        stored_docs = {}
-        mock_session.store = lambda doc, doc_id: stored_docs.update({doc_id: doc})
-        mock_session.save_changes = MagicMock()
-
-        mock_store = MagicMock()
-        mock_store.open_session.return_value = mock_session
+        mock_store, stored_docs = self._make_mock_store(existing_doc=existing)
 
         with patch("src.tools.save_conversation.get_store", return_value=mock_store):
             await save_conversation(
@@ -218,7 +217,6 @@ class TestSaveConversation:
                 constraints={"carry_on_only": True},
             )
 
-        assert mock_session.save_changes.called
         doc = stored_docs["sessions/u1-1"]
         assert doc["active_constraints"]["carry_on_only"] is True
         assert doc["active_constraints"]["max_stops"] == 2  # unchanged

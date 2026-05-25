@@ -10,17 +10,49 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
 
-load_dotenv()
+load_dotenv(override=True)
 from pydantic import BaseModel
 
 from src.agent.loop import AgentResult, run_agent, stream_agent
-from src.db.client import get_store
+from src.db.client import doc_to_dict, get_store
 from src.db.models import ConversationTurn
+from src.db.seed import seed_if_empty
 
 log = logging.getLogger(__name__)
 app = FastAPI(title="Hidden City Flight Agent")
 
 _UI_PATH = Path(__file__).parent.parent / "chat" / "index.html"
+
+
+@app.on_event("startup")
+async def _startup() -> None:
+    import asyncio
+
+    host = os.getenv("HOST", "127.0.0.1")
+    port = os.getenv("PORT", "8000")
+    print("\n  Hidden City Flight Agent", flush=True)
+    print(f"  Chat UI  →  http://{host}:{port}/", flush=True)
+    print("  DB       →  seeding check...", flush=True)
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, seed_if_empty)
+    except Exception as _e:
+        import traceback
+        print(f"  DB       →  seed failed: {_e}", flush=True)
+        traceback.print_exc()
+        log.exception("DB seed failed — continuing without fixture data")
+
+    token = os.getenv("TRAVELPAYOUTS_TOKEN")
+    if token:
+        try:
+            from src.scraper.run import run as _run_scraper
+            await _run_scraper()
+        except Exception as _e:
+            print(f"  Travelpayouts → failed: {_e}", flush=True)
+            log.exception("Travelpayouts fetch failed at startup")
+    else:
+        print("  Travelpayouts → TRAVELPAYOUTS_TOKEN not set, skipping", flush=True)
+    print("", flush=True)
 
 
 class ChatRequest(BaseModel):
@@ -39,7 +71,7 @@ class ChatResponse(BaseModel):
 
 
 def _load_prior_turns(user_id: str, session_id: str) -> list[dict]:
-    """Load last 10 turns from RavenDB session document as Anthropic messages."""
+    """Load last 10 turns from RavenDB session document as OpenAI messages."""
     doc_id = f"sessions/{user_id}-{session_id}"
     store = get_store()
     with store.open_session() as session:
@@ -48,7 +80,8 @@ def _load_prior_turns(user_id: str, session_id: str) -> list[dict]:
     if raw is None:
         return []
 
-    turns = raw.get("turns", [])[-10:]
+    raw_dict = doc_to_dict(raw)
+    turns = raw_dict.get("turns", [])[-10:]
     return [{"role": t["role"], "content": t["content"]} for t in turns]
 
 
@@ -65,14 +98,8 @@ async def get_airports() -> list[dict]:
     """Return all airport documents for the map."""
     store = get_store()
     with store.open_session() as session:
-        docs = list(session.query(collection="Airports").all())
-    result = []
-    for d in docs:
-        if isinstance(d, dict):
-            result.append(d)
-        else:
-            result.append(vars(d) if hasattr(d, "__dict__") else {})
-    return result
+        docs = list(session.query(collection_name="Airports").take(10_000))
+    return [doc_to_dict(d) for d in docs]
 
 
 @app.get("/api/routes")
@@ -80,13 +107,8 @@ async def get_routes() -> list[dict]:
     """Return all route documents for the map arcs."""
     store = get_store()
     with store.open_session() as session:
-        docs = list(session.query(collection="Routes").all())
-    result = []
-    for d in docs:
-        if isinstance(d, dict):
-            result.append(d)
-        else:
-            result.append(vars(d) if hasattr(d, "__dict__") else {})
+        docs = list(session.query(collection_name="Routes").take(10_000))
+    result = [doc_to_dict(d) for d in docs]
     return result
 
 
@@ -114,14 +136,19 @@ async def chat(request: ChatRequest) -> ChatResponse:
 
 @app.post("/chat/stream")
 async def chat_stream(request: ChatRequest) -> StreamingResponse:
+    import json
     prior_turns = _load_prior_turns(request.user_id, request.session_id)
 
     async def generate():
-        async for chunk in stream_agent(
-            user_message=request.message,
-            prior_turns=prior_turns,
-        ):
-            yield chunk
+        try:
+            async for chunk in stream_agent(
+                user_message=request.message,
+                prior_turns=prior_turns,
+            ):
+                yield chunk
+        except Exception as exc:
+            log.exception("stream_agent error")
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 

@@ -62,9 +62,8 @@ class TestRouteStoreAndLoad:
         ravendb_session.save_changes()
 
         results = list(
-            ravendb_session.query(collection="Routes")
+            ravendb_session.query(collection_name="Routes")
             .where_equals("origin", "WAW")
-            .all()
         )
         origins = {r["origin"] for r in results}
         assert origins == {"WAW"}
@@ -90,9 +89,8 @@ class TestRouteStoreAndLoad:
         ravendb_session.save_changes()
 
         candidates = list(
-            ravendb_session.query(collection="Routes")
+            ravendb_session.query(collection_name="Routes")
             .where_greater_than("hidden_city_score", 0.5)
-            .all()
         )
         assert all(r["hidden_city_score"] > 0.5 for r in candidates)
 

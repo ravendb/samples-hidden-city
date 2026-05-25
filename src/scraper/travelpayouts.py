@@ -41,13 +41,25 @@ async def fetch_cheapest_from(
 
     now = datetime.now(timezone.utc)
     routes: list[RouteDocument] = []
+    data = payload.get("data", [])
 
-    for destination, info in payload.get("data", {}).items():
-        price = float(info["price"])
+    # API returns either a list of objects or a dict keyed by destination
+    if isinstance(data, dict):
+        items = [{"destination": dest, **info} for dest, info in data.items()]
+    else:
+        items = data
+
+    for item in items:
+        dest = item.get("destination")
+        price_raw = item.get("price") or item.get("value")
+        if not dest or not price_raw:
+            continue
+        price = float(price_raw)
+        depart_date = item.get("depart_date") or item.get("departure_at", "")[:10] or None
         routes.append(
             RouteDocument(
                 origin=origin,
-                destination=destination,
+                destination=dest,
                 hubs=[],
                 typical_price=TypicalPrice(
                     min=round(price * (1 - _PRICE_SPREAD), 2),
@@ -55,6 +67,7 @@ async def fetch_cheapest_from(
                     currency=currency.upper(),
                 ),
                 duration_avg_min=0,
+                depart_date=depart_date,
                 last_updated=now,
             )
         )
