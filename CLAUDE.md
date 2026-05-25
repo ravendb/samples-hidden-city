@@ -98,11 +98,11 @@ uvicorn src.agent.app:app --reload    # start agent on :8000
 kubectl get ravendbclusters
 kubectl describe ravendbclusters ravendb-cluster
 
-# Deploy everything
-bash k8s/operator/install.sh            # install RavenDB operator (once)
+# Deploy everything (shows operator install → RavenDB cluster readiness → agent rollout → URLs)
 cp k8s/secrets.yaml k8s/secrets.local.yaml && vim k8s/secrets.local.yaml
-kubectl apply -f k8s/secrets.local.yaml  # secrets applied separately, not in kustomize
-kubectl apply -k k8s/                   # apply everything else via kustomize
+bash k8s/deploy.sh                      # full deploy with progress output
+bash k8s/deploy.sh --skip-operator      # re-deploy without reinstalling the operator
+bash k8s/deploy.sh --skip-build         # re-deploy without rebuilding the Docker image
 
 # Run tests
 pytest tests/unit/

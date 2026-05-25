@@ -1,0 +1,25 @@
+# Expose the chat UI and API outside the cluster.
+# Requires an Ingress controller (nginx-ingress or similar) to be installed.
+# For local dev with kind/minikube: kubectl port-forward svc/agent-svc 8000:80 -n hidden-city
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: agent-ingress
+  namespace: hidden-city
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    # SSE requires buffering to be disabled so streaming responses reach the client.
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: agent-svc
+                port:
+                  number: 80

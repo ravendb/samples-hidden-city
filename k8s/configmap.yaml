@@ -4,7 +4,9 @@ metadata:
   name: hidden-city-config
   namespace: hidden-city
 data:
+  # ravendb-cluster-svc = ClusterIP service the operator creates for the RavenDBCluster.
+  # Switch to https://ravendb-cluster-svc:443 when tlsMode=ClusterExternalAccess.
   RAVENDB_URL: "http://ravendb-cluster-svc:8080"
   RAVENDB_DATABASE: "hidden-city"
-  LLM_MODEL: "claude-sonnet-4-20250514"
+  LLM_MODEL: "gpt-4o-mini"
   MAX_TOKENS_BUDGET: "1500"
