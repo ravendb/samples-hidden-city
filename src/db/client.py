@@ -22,3 +22,18 @@ def reset_store() -> None:
     if _store is not None:
         _store.dispose()
         _store = None
+
+
+def doc_to_dict(obj) -> dict:
+    """Recursively convert a pyravendb _DynamicStructure (or plain dict) to a plain dict."""
+    if isinstance(obj, dict):
+        return {k: doc_to_dict(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [doc_to_dict(item) for item in obj]
+    if hasattr(obj, "__dict__"):
+        return {
+            k: doc_to_dict(v)
+            for k, v in vars(obj).items()
+            if not k.startswith("_")
+        }
+    return obj

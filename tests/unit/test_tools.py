@@ -39,7 +39,7 @@ class TestSearchRoutes:
         mock_query.where_equals.return_value = mock_query
         mock_query.where_greater_than.return_value = mock_query
         mock_query.take.return_value = mock_query
-        mock_query.all = MagicMock(side_effect=lambda: iter(routes))
+        mock_query.__iter__ = MagicMock(side_effect=lambda: iter(routes))
 
         mock_session = MagicMock()
         mock_session.__enter__ = MagicMock(return_value=mock_session)

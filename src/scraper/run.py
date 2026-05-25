@@ -32,7 +32,9 @@ async def run() -> None:
 
         with store.bulk_insert() as bulk:
             for route in enriched:
-                bulk.store(route.model_dump(), route.route_id())
+                data = route.model_dump()
+                data["@metadata"] = {"@collection": "Routes"}
+                bulk.store(data, route.route_id())
 
         log.info("Wrote %d routes for origin %s", len(enriched), origin)
 

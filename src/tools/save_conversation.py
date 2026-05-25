@@ -9,7 +9,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from src.db.client import get_store
+from src.db.client import doc_to_dict, get_store
 from src.db.models import ActiveConstraints, ConversationTurn, SessionDocument
 
 log = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ async def save_conversation(
         if raw is None:
             doc = SessionDocument(user_id=user_id)
         else:
-            doc = SessionDocument(**raw)
+            doc = SessionDocument(**doc_to_dict(raw))
 
         doc.turns.append(ConversationTurn(role="user", content=user_message, timestamp=now))
         doc.turns.append(

@@ -112,10 +112,10 @@ if (Test-Path "$root\license.json") {
 $envLines = Get-Content "$root\.env"
 
 $keysInfo = @(
-    @{ Key = "ANTHROPIC_API_KEY";     Desc = "Anthropic API key (agent won't start without it)";  Required = $true  },
-    @{ Key = "KIWI_API_KEY";          Desc = "Kiwi Tequila key (optional, live hidden city)";      Required = $false },
+    @{ Key = "OPENAI_API_KEY";        Desc = "OpenAI API key (agent won't start without it)";      Required = $true  },
     @{ Key = "AMADEUS_CLIENT_ID";     Desc = "Amadeus client ID (optional, live direct prices)";   Required = $false },
-    @{ Key = "AMADEUS_CLIENT_SECRET"; Desc = "Amadeus client secret";                              Required = $false }
+    @{ Key = "AMADEUS_CLIENT_SECRET"; Desc = "Amadeus client secret";                              Required = $false },
+    @{ Key = "TRAVELPAYOUTS_TOKEN";   Desc = "Travelpayouts / Aviasales Data API token (optional, bulk scraper)"; Required = $false }
 )
 
 $anyMissing = $false

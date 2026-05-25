@@ -151,7 +151,9 @@ def _write_to_ravendb(
     try:
         store = get_store()
         with store.open_session() as session:
-            session.store(route.model_dump(), route.route_id())
+            data = route.model_dump()
+            data["@metadata"] = {"@collection": "Routes"}
+            session.store(data, route.route_id())
             session.save_changes()
         log.info("Cached live price for %s→%s: $%s", origin, destination, price)
     except Exception:
