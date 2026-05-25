@@ -41,6 +41,17 @@ async def _startup() -> None:
         print(f"  DB       →  seed failed: {_e}", flush=True)
         traceback.print_exc()
         log.exception("DB seed failed — continuing without fixture data")
+
+    token = os.getenv("TRAVELPAYOUTS_TOKEN")
+    if token:
+        try:
+            from src.scraper.run import run as _run_scraper
+            await _run_scraper()
+        except Exception as _e:
+            print(f"  Travelpayouts → failed: {_e}", flush=True)
+            log.exception("Travelpayouts fetch failed at startup")
+    else:
+        print("  Travelpayouts → TRAVELPAYOUTS_TOKEN not set, skipping", flush=True)
     print("", flush=True)
 
 
@@ -87,14 +98,8 @@ async def get_airports() -> list[dict]:
     """Return all airport documents for the map."""
     store = get_store()
     with store.open_session() as session:
-        docs = list(session.query(collection_name="Airports"))
-    result = []
-    for d in docs:
-        if isinstance(d, dict):
-            result.append(d)
-        else:
-            result.append(vars(d) if hasattr(d, "__dict__") else {})
-    return result
+        docs = list(session.query(collection_name="Airports").take(10_000))
+    return [doc_to_dict(d) for d in docs]
 
 
 @app.get("/api/routes")
@@ -102,13 +107,8 @@ async def get_routes() -> list[dict]:
     """Return all route documents for the map arcs."""
     store = get_store()
     with store.open_session() as session:
-        docs = list(session.query(collection_name="Routes"))
-    result = []
-    for d in docs:
-        if isinstance(d, dict):
-            result.append(d)
-        else:
-            result.append(vars(d) if hasattr(d, "__dict__") else {})
+        docs = list(session.query(collection_name="Routes").take(10_000))
+    result = [doc_to_dict(d) for d in docs]
     return result
 
 

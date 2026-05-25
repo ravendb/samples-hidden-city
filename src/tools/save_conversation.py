@@ -9,6 +9,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
+from pyravendb.commands.commands_data import PutDocumentCommand
+
 from src.db.client import doc_to_dict, get_store
 from src.db.models import ActiveConstraints, ConversationTurn, SessionDocument
 
@@ -49,8 +51,9 @@ async def save_conversation(
             current.update({k: v for k, v in constraints.items() if v is not None})
             doc.active_constraints = ActiveConstraints(**current)
 
-        session.store(doc.model_dump(), doc_id)
-        session.save_changes()
+        data = doc.model_dump(mode="json")
+        data["@metadata"] = {"@collection": "Sessions"}
+        store.get_request_executor().execute(PutDocumentCommand(key=doc_id, document=data))
 
     log.info("Saved turn for %s session %s (%d total turns)", user_id, session_id, len(doc.turns))
     return {"saved": True, "session_id": doc_id, "total_turns": len(doc.turns)}

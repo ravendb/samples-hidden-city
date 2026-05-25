@@ -75,7 +75,7 @@ def seed_airports(store) -> int:
             coordinates=Coordinates(**raw["coordinates"]),
             nearby=[NearbyAirport(**n) for n in raw.get("nearby", [])],
         )
-        data = doc.model_dump()
+        data = doc.model_dump(mode="json")
         data["@metadata"] = {"@collection": "Airports"}
         executor.execute(PutDocumentCommand(key=doc.airport_id(), document=data))
 
@@ -100,7 +100,7 @@ def seed_routes(store) -> int:
 
     executor = store.get_request_executor()
     for route in enriched:
-        data = route.model_dump()
+        data = route.model_dump(mode="json")
         data["@metadata"] = {"@collection": "Routes"}
         executor.execute(PutDocumentCommand(key=route.route_id(), document=data))
 
@@ -108,26 +108,31 @@ def seed_routes(store) -> int:
 
 
 def seed_if_empty() -> None:
-    """Seeds airports and fixture routes if the Routes collection is empty."""
+    """Seeds airports and fixture routes if their respective collections are empty."""
     store = get_store()
     ensure_database(store)
 
     with store.open_session() as session:
-        existing = list(session.query(collection_name="Routes").take(1))
+        existing_airports = list(session.query(collection_name="Airports").take(1))
 
-    if existing:
+    if not existing_airports:
+        print("  DB: seeding airports...", flush=True)
+        n_airports = seed_airports(store)
+        print(f"  DB: {n_airports} airports written", flush=True)
+    else:
+        print("  DB: airports already seeded — skipping", flush=True)
+
+    with store.open_session() as session:
+        existing_routes = list(session.query(collection_name="Routes").take(1))
+
+    if not existing_routes:
+        print("  DB: seeding fixture routes...", flush=True)
+        n_routes = seed_routes(store)
+        hidden = _count_hidden(store)
+        print(f"  DB: {n_routes} routes written ({hidden} hidden city candidates)", flush=True)
+    else:
         n = _count_routes(store)
         print(f"  DB: {n} routes already in database — skipping seed", flush=True)
-        return
-
-    print("  DB: seeding airports...", flush=True)
-    n_airports = seed_airports(store)
-    print(f"  DB: {n_airports} airports written", flush=True)
-
-    print("  DB: seeding fixture routes...", flush=True)
-    n_routes = seed_routes(store)
-    hidden = _count_hidden(store)
-    print(f"  DB: {n_routes} routes written ({hidden} hidden city candidates)", flush=True)
 
 
 def _count_routes(store) -> int:

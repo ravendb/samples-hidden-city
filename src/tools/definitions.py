@@ -49,7 +49,8 @@ TOOL_DEFINITIONS = [
             "name": "get_live_price",
             "description": (
                 "Fetch a live price from Kiwi Tequila (hidden city routes) or Amadeus (direct routes). "
-                "Use only when search_routes returns stale=true or no results."
+                "Use when search_routes returns stale=true, no results, or has_schedule=false. "
+                "Returns departure date, departure/arrival times, and duration."
             ),
             "parameters": {
                 "type": "object",
@@ -58,7 +59,7 @@ TOOL_DEFINITIONS = [
                     "destination": {"type": "string", "description": "Endpoint IATA code"},
                     "date": {
                         "type": "string",
-                        "description": "Departure date YYYY-MM-DD",
+                        "description": "Departure date YYYY-MM-DD. Omit to use the nearest available.",
                     },
                     "route_type": {
                         "type": "string",
@@ -66,7 +67,7 @@ TOOL_DEFINITIONS = [
                         "description": "direct → Amadeus, hidden_city → Kiwi Tequila",
                     },
                 },
-                "required": ["origin", "destination", "date", "route_type"],
+                "required": ["origin", "destination", "route_type"],
             },
         },
     },

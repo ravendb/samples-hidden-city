@@ -7,6 +7,8 @@ import asyncio
 import logging
 import os
 
+from pyravendb.commands.commands_data import PutDocumentCommand
+
 from src.db.client import get_store
 from src.db.models import RouteDocument
 from src.hidden_city.enricher import enrich_hidden_city
@@ -20,23 +22,27 @@ ORIGINS = ["WAW", "KTW", "KRK", "WRO"]
 async def run() -> None:
     token = os.environ["TRAVELPAYOUTS_TOKEN"]
     store = get_store()
+    total_written = 0
 
     for origin in ORIGINS:
-        log.info("Scraping %s", origin)
+        print(f"  Travelpayouts → fetching {origin}...", flush=True)
         routes = await fetch_cheapest_from(origin, token)
         log.info("Fetched %d routes from %s", len(routes), origin)
 
         enriched = enrich_hidden_city(routes)
         hidden = sum(1 for r in enriched if r.hidden_city_score > 0.5)
-        log.info("Hidden city candidates: %d", hidden)
 
-        with store.bulk_insert() as bulk:
-            for route in enriched:
-                data = route.model_dump()
-                data["@metadata"] = {"@collection": "Routes"}
-                bulk.store(data, route.route_id())
+        executor = store.get_request_executor()
+        for route in enriched:
+            data = route.model_dump(mode="json")
+            data["@metadata"] = {"@collection": "Routes"}
+            executor.execute(PutDocumentCommand(key=route.route_id(), document=data))
 
+        total_written += len(enriched)
+        print(f"  Travelpayouts → {origin}: {len(enriched)} routes ({hidden} hidden city)", flush=True)
         log.info("Wrote %d routes for origin %s", len(enriched), origin)
+
+    print(f"  Travelpayouts → done, {total_written} routes total", flush=True)
 
 
 if __name__ == "__main__":

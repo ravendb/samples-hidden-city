@@ -27,6 +27,9 @@ class RouteDocument(BaseModel):
     hubs: list[str] = Field(default_factory=list)
     typical_price: TypicalPrice
     duration_avg_min: int = 0
+    depart_date: Optional[str] = None   # "2025-06-15"
+    depart_time: Optional[str] = None   # "14:30"
+    arrive_time: Optional[str] = None   # "20:45"
     hidden_city_score: float = 0.0
     hidden_city_via: Optional[str] = None
     hidden_city_decoy: Optional[str] = None

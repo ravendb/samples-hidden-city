@@ -72,6 +72,16 @@ async def search_routes(
             "price_usd": r.get("typical_price", {}),
             "stale": stale,
         }
+        if r.get("depart_date"):
+            route_entry["depart_date"] = r["depart_date"]
+        if r.get("depart_time"):
+            route_entry["depart_time"] = r["depart_time"]
+        if r.get("arrive_time"):
+            route_entry["arrive_time"] = r["arrive_time"]
+        if r.get("duration_avg_min"):
+            h, m = divmod(r["duration_avg_min"], 60)
+            route_entry["duration"] = f"{h}h {m:02d}m" if h else f"{m}m"
+        route_entry["has_schedule"] = bool(r.get("depart_time"))
 
         base_score = r.get("hidden_city_score", 0.0)
         if base_score > 0.5:

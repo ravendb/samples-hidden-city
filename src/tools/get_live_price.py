@@ -12,6 +12,7 @@ import time
 from datetime import datetime, timezone
 
 import httpx
+from pyravendb.commands.commands_data import PutDocumentCommand
 
 from src.db.client import get_store
 from src.db.models import RouteDocument, TypicalPrice
@@ -51,11 +52,17 @@ async def _kiwi_search(origin: str, destination: str, date: str) -> dict:
 
     best = itineraries[0]
     hubs = [r["flyTo"] for r in best.get("route", [])[:-1]]
+    depart_dt = best.get("local_departure", "")
+    arrive_dt = best.get("local_arrival", "")
     return {
         "found": True,
         "price_usd": best["price"],
         "hubs": hubs,
         "airline": best.get("airlines", []),
+        "depart_date": depart_dt[:10] if depart_dt else None,
+        "depart_time": depart_dt[11:16] if len(depart_dt) >= 16 else None,
+        "arrive_time": arrive_dt[11:16] if len(arrive_dt) >= 16 else None,
+        "duration_min": _parse_kiwi_duration(best.get("fly_duration", "")),
     }
 
 
@@ -112,12 +119,18 @@ async def _amadeus_search(origin: str, destination: str, date: str) -> dict:
     best = offers[0]
     price = float(best["price"]["total"])
     itinerary = best["itineraries"][0]
-    hubs = [s["departure"]["iataCode"] for s in itinerary["segments"][:-1]]
+    segments = itinerary["segments"]
+    hubs = [s["departure"]["iataCode"] for s in segments[:-1]]
+    depart_dt = segments[0]["departure"].get("at", "")
+    arrive_dt = segments[-1]["arrival"].get("at", "")
     return {
         "found": True,
         "price_usd": price,
         "hubs": hubs,
         "duration_min": _parse_duration(itinerary.get("duration", "")),
+        "depart_date": depart_dt[:10] if depart_dt else None,
+        "depart_time": depart_dt[11:16] if len(depart_dt) >= 16 else None,
+        "arrive_time": arrive_dt[11:16] if len(arrive_dt) >= 16 else None,
     }
 
 
@@ -130,6 +143,15 @@ def _parse_duration(iso_duration: str) -> int:
     hours = int(m.group(1) or 0)
     minutes = int(m.group(2) or 0)
     return hours * 60 + minutes
+
+
+def _parse_kiwi_duration(s: str) -> int:
+    """Parse '10h 30m' or '10h' or '30m' → minutes."""
+    import re
+    m = re.search(r"(?:(\d+)h)?\s*(?:(\d+)m)?", s)
+    if not m:
+        return 0
+    return int(m.group(1) or 0) * 60 + int(m.group(2) or 0)
 
 
 def _write_to_ravendb(
@@ -146,15 +168,16 @@ def _write_to_ravendb(
             currency="USD",
         ),
         duration_avg_min=duration_min,
+        depart_date=result.get("depart_date"),
+        depart_time=result.get("depart_time"),
+        arrive_time=result.get("arrive_time"),
         last_updated=datetime.now(timezone.utc),
     )
     try:
         store = get_store()
-        with store.open_session() as session:
-            data = route.model_dump()
-            data["@metadata"] = {"@collection": "Routes"}
-            session.store(data, route.route_id())
-            session.save_changes()
+        data = route.model_dump(mode="json")
+        data["@metadata"] = {"@collection": "Routes"}
+        store.get_request_executor().execute(PutDocumentCommand(key=route.route_id(), document=data))
         log.info("Cached live price for %s→%s: $%s", origin, destination, price)
     except Exception:
         log.exception("Failed to cache price for %s→%s — continuing", origin, destination)
@@ -163,16 +186,19 @@ def _write_to_ravendb(
 async def get_live_price(
     origin: str,
     destination: str,
-    date: str,
     route_type: str,
+    date: str | None = None,
 ) -> dict:
     origin = origin.upper()
     destination = destination.upper()
+    if not date:
+        from datetime import timedelta
+        date = (datetime.now(timezone.utc) + timedelta(days=7)).strftime("%Y-%m-%d")
 
     if route_type == "hidden_city":
         result = await _kiwi_search(origin, destination, date)
         hubs = result.get("hubs", [])
-        duration_min = 0
+        duration_min = result.get("duration_min", 0)
     else:
         result = await _amadeus_search(origin, destination, date)
         hubs = result.get("hubs", [])
