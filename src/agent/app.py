@@ -119,6 +119,8 @@ async def chat(request: ChatRequest) -> ChatResponse:
     result: AgentResult = await run_agent(
         user_message=request.message,
         prior_turns=prior_turns,
+        user_id=request.user_id,
+        session_id=request.session_id,
     )
 
     if result.tool_token_warnings:
@@ -144,6 +146,8 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
             async for chunk in stream_agent(
                 user_message=request.message,
                 prior_turns=prior_turns,
+                user_id=request.user_id,
+                session_id=request.session_id,
             ):
                 yield chunk
         except Exception as exc:
