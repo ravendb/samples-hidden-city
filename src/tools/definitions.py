@@ -88,6 +88,47 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "update_user_profile",
+            "description": (
+                "Save durable user preferences to RavenDB. Call when the user expresses "
+                "a preference that should carry across sessions: always carry-on only, "
+                "home airport, preferred airlines, loyalty programs. "
+                "Do NOT use for trip-specific constraints — use save_conversation for those."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string"},
+                    "carry_on_only": {
+                        "type": "boolean",
+                        "description": "User always travels without checked baggage.",
+                    },
+                    "max_stops": {
+                        "type": "integer",
+                        "description": "Preferred maximum number of stops across all trips.",
+                    },
+                    "home_airport": {
+                        "type": "string",
+                        "description": "User's default departure airport IATA code (e.g. WAW).",
+                    },
+                    "preferred_airlines": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Airlines the user prefers (e.g. ['LOT', 'Lufthansa']).",
+                    },
+                    "loyalty_programs": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Frequent flyer programs the user holds (e.g. ['Miles & More']).",
+                    },
+                },
+                "required": ["user_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "save_conversation",
             "description": (
                 "Persist the current turn to RavenDB. Call after your final response. "

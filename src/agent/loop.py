@@ -46,14 +46,17 @@ def _estimate_tokens(text: str) -> int:
 async def run_agent(
     user_message: str,
     prior_turns: list[dict],
+    user_id: str = "anonymous",
+    session_id: str = "1",
 ) -> AgentResult:
     """
     prior_turns: list of {"role": ..., "content": ...} built from the session document.
     Callers (app.py) are responsible for loading the session from RavenDB first.
     """
     client = AsyncOpenAI()
+    system_content = f"{SYSTEM_PROMPT}\n\nCurrent user_id: {user_id}. Session: {session_id}."
     messages = (
-        [{"role": "system", "content": SYSTEM_PROMPT}]
+        [{"role": "system", "content": system_content}]
         + prior_turns
         + [{"role": "user", "content": user_message}]
     )
@@ -139,11 +142,14 @@ async def run_agent(
 async def stream_agent(
     user_message: str,
     prior_turns: list[dict],
+    user_id: str = "anonymous",
+    session_id: str = "1",
 ) -> AsyncGenerator[str, None]:
     """Streaming variant -- yields SSE-formatted strings for /chat/stream."""
     client = AsyncOpenAI()
+    system_content = f"{SYSTEM_PROMPT}\n\nCurrent user_id: {user_id}. Session: {session_id}."
     messages = (
-        [{"role": "system", "content": SYSTEM_PROMPT}]
+        [{"role": "system", "content": system_content}]
         + prior_turns
         + [{"role": "user", "content": user_message}]
     )

@@ -9,6 +9,7 @@ import pytest
 
 from src.tools.save_conversation import save_conversation
 from src.tools.search_routes import _is_stale, search_routes
+from src.tools.update_user_profile import update_user_profile
 
 WARN_TOOL_TOKENS = 800  # mirrors src/agent/loop.py
 
@@ -220,3 +221,70 @@ class TestSaveConversation:
         doc = stored_docs["sessions/u1-1"]
         assert doc["active_constraints"]["carry_on_only"] is True
         assert doc["active_constraints"]["max_stops"] == 2  # unchanged
+
+
+class TestUpdateUserProfile:
+    def _make_mock_store(self, existing_doc=None):
+        mock_session = MagicMock()
+        mock_session.__enter__ = MagicMock(return_value=mock_session)
+        mock_session.__exit__ = MagicMock(return_value=False)
+        mock_session.load.return_value = existing_doc
+
+        stored_docs = {}
+        mock_executor = MagicMock()
+        mock_executor.execute = MagicMock(
+            side_effect=lambda cmd: stored_docs.update({cmd.key: cmd.document})
+        )
+
+        mock_store = MagicMock()
+        mock_store.open_session.return_value = mock_session
+        mock_store.get_request_executor.return_value = mock_executor
+        return mock_store, stored_docs
+
+    @pytest.mark.asyncio
+    async def test_creates_user_doc_when_none_exists(self):
+        mock_store, stored_docs = self._make_mock_store(existing_doc=None)
+
+        with patch("src.tools.update_user_profile.get_store", return_value=mock_store):
+            result = await update_user_profile(user_id="u1", carry_on_only=True)
+
+        assert result["saved"] is True
+        assert "carry_on_only" in result["updated_fields"]
+        assert stored_docs["users/u1"]["carry_on_only"] is True
+
+    @pytest.mark.asyncio
+    async def test_merges_with_existing_doc(self):
+        existing = {"carry_on_only": False, "home_airport": "WAW", "preferred_airlines": []}
+        mock_store, stored_docs = self._make_mock_store(existing_doc=existing)
+
+        with patch("src.tools.update_user_profile.get_store", return_value=mock_store):
+            result = await update_user_profile(
+                user_id="u1",
+                carry_on_only=True,
+                loyalty_programs=["Miles & More"],
+            )
+
+        doc = stored_docs["users/u1"]
+        assert doc["carry_on_only"] is True
+        assert doc["home_airport"] == "WAW"  # preserved
+        assert doc["loyalty_programs"] == ["Miles & More"]
+        assert result["saved"] is True
+
+    @pytest.mark.asyncio
+    async def test_home_airport_uppercased(self):
+        mock_store, stored_docs = self._make_mock_store(existing_doc=None)
+
+        with patch("src.tools.update_user_profile.get_store", return_value=mock_store):
+            await update_user_profile(user_id="u1", home_airport="waw")
+
+        assert stored_docs["users/u1"]["home_airport"] == "WAW"
+
+    @pytest.mark.asyncio
+    async def test_no_fields_returns_not_saved(self):
+        mock_store, stored_docs = self._make_mock_store(existing_doc=None)
+
+        with patch("src.tools.update_user_profile.get_store", return_value=mock_store):
+            result = await update_user_profile(user_id="u1")
+
+        assert result["saved"] is False
+        assert stored_docs == {}  # nothing written to RavenDB

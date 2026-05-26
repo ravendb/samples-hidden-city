@@ -9,6 +9,7 @@ resources:
   - ravendb/ravendb-cluster.yaml
   - agent/deployment.yaml
   - agent/service.yaml
+  - agent/ingress.yaml
   - scraper/cronjob.yaml
   - worker/deployment.yaml
 
