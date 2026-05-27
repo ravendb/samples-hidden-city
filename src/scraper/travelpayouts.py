@@ -1,7 +1,7 @@
 """
 Travelpayouts /v2/prices/latest — bulk cheapest prices from an origin.
 Called by the CronJob scraper every 6h. On cache miss, get_live_price tool
-calls Kiwi or Amadeus instead (see src/tools/get_live_price.py).
+calls Travelpayouts /v1/prices/cheap instead (see src/tools/get_live_price.py).
 """
 from datetime import datetime, timezone
 
@@ -22,7 +22,7 @@ async def fetch_cheapest_from(
     """
     Returns up to `limit` cheapest routes from `origin`.
     Hubs are NOT populated here — Travelpayouts does not expose itinerary legs.
-    Hub enrichment happens via Amadeus in the get_live_price tool (cache miss path).
+    Hub enrichment is not available via Travelpayouts — hubs remain empty until enriched manually.
     """
     params = {
         "origin": origin,

@@ -1,183 +1,119 @@
 """
-get_live_price tool — live API calls on cache miss.
+get_live_price tool — refreshes price from Travelpayouts on cache miss.
 
-  hidden_city → Kiwi Tequila (specialises in non-obvious routing)
-  direct      → Amadeus (400+ airlines, accurate direct prices)
+Travelpayouts /v1/prices/cheap returns: price, departure date/time, stops count.
+It does NOT return arrival time or intermediate hub airports.
 
-Results are written back to RavenDB so the next call is a cache hit.
+Strategy:
+- Load the existing RavenDB route doc to preserve hubs and duration_avg_min.
+- Fetch fresh price + depart_time from Travelpayouts.
+- Compute arrive_time = depart_time + duration_avg_min (if both known).
+- Write back only the price/timing fields; structural data (hubs, duration) unchanged.
 """
 import logging
 import os
-import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from pyravendb.commands.commands_data import PutDocumentCommand
 
-from src.db.client import get_store
+from src.db.client import doc_to_dict, get_store
 from src.db.models import RouteDocument, TypicalPrice
 
 log = logging.getLogger(__name__)
 
-_KIWI_BASE = "https://api.tequila.kiwi.com/v2"
-_AMADEUS_BASE = "https://test.api.amadeus.com"  # swap to production URL for prod
-
-_amadeus_token_cache: dict = {}
+_BASE = "https://api.travelpayouts.com"
+_PRICE_SPREAD = 0.15
 
 
-async def _kiwi_search(origin: str, destination: str, date: str) -> dict:
-    api_key = os.environ["KIWI_API_KEY"]
+async def _travelpayouts_search(origin: str, destination: str, date: str) -> dict:
+    token = os.environ["TRAVELPAYOUTS_TOKEN"]
     params = {
-        "fly_from": origin,
-        "fly_to": destination,
-        "date_from": date,
-        "date_to": date,
-        "curr": "USD",
-        "limit": 3,
-        "sort": "price",
-        "max_stopovers": 2,
+        "origin": origin,
+        "destination": destination,
+        "depart_date": date[:7],  # API expects YYYY-MM
+        "token": token,
+        "currency": "usd",
     }
     async with httpx.AsyncClient(timeout=15.0) as client:
-        response = await client.get(
-            f"{_KIWI_BASE}/search",
-            params=params,
-            headers={"apikey": api_key},
-        )
+        response = await client.get(f"{_BASE}/v1/prices/cheap", params=params)
         response.raise_for_status()
 
-    data = response.json()
-    itineraries = data.get("data", [])
-    if not itineraries:
+    payload = response.json()
+    if not payload.get("success"):
         return {"found": False}
 
-    best = itineraries[0]
-    hubs = [r["flyTo"] for r in best.get("route", [])[:-1]]
-    depart_dt = best.get("local_departure", "")
-    arrive_dt = best.get("local_arrival", "")
-    return {
-        "found": True,
-        "price_usd": best["price"],
-        "hubs": hubs,
-        "airline": best.get("airlines", []),
-        "depart_date": depart_dt[:10] if depart_dt else None,
-        "depart_time": depart_dt[11:16] if len(depart_dt) >= 16 else None,
-        "arrive_time": arrive_dt[11:16] if len(arrive_dt) >= 16 else None,
-        "duration_min": _parse_kiwi_duration(best.get("fly_duration", "")),
-    }
-
-
-async def _get_amadeus_token() -> str:
-    cached = _amadeus_token_cache
-    if cached.get("access_token") and cached.get("expires_at", 0) > time.time():
-        return cached["access_token"]
-
-    client_id = os.environ["AMADEUS_CLIENT_ID"]
-    client_secret = os.environ["AMADEUS_CLIENT_SECRET"]
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        response = await client.post(
-            f"{_AMADEUS_BASE}/v1/security/oauth2/token",
-            data={
-                "grant_type": "client_credentials",
-                "client_id": client_id,
-                "client_secret": client_secret,
-            },
-        )
-        response.raise_for_status()
-
-    token_data = response.json()
-    _amadeus_token_cache.update(
-        {
-            "access_token": token_data["access_token"],
-            "expires_at": time.time() + token_data["expires_in"] - 60,
-        }
-    )
-    return token_data["access_token"]
-
-
-async def _amadeus_search(origin: str, destination: str, date: str) -> dict:
-    token = await _get_amadeus_token()
-    params = {
-        "originLocationCode": origin,
-        "destinationLocationCode": destination,
-        "departureDate": date,
-        "adults": 1,
-        "currencyCode": "USD",
-        "max": 3,
-    }
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        response = await client.get(
-            f"{_AMADEUS_BASE}/v2/shopping/flight-offers",
-            params=params,
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        response.raise_for_status()
-
-    offers = response.json().get("data", [])
-    if not offers:
+    data = payload.get("data", {})
+    dest_data = data.get(destination) or (list(data.values())[0] if data else None)
+    if not dest_data:
         return {"found": False}
 
-    best = offers[0]
-    price = float(best["price"]["total"])
-    itinerary = best["itineraries"][0]
-    segments = itinerary["segments"]
-    hubs = [s["departure"]["iataCode"] for s in segments[:-1]]
-    depart_dt = segments[0]["departure"].get("at", "")
-    arrive_dt = segments[-1]["arrival"].get("at", "")
+    depart_at = dest_data.get("departure_at", "")
     return {
         "found": True,
-        "price_usd": price,
-        "hubs": hubs,
-        "duration_min": _parse_duration(itinerary.get("duration", "")),
-        "depart_date": depart_dt[:10] if depart_dt else None,
-        "depart_time": depart_dt[11:16] if len(depart_dt) >= 16 else None,
-        "arrive_time": arrive_dt[11:16] if len(arrive_dt) >= 16 else None,
+        "price_usd": float(dest_data.get("price", 0)),
+        "depart_date": depart_at[:10] if depart_at else date,
+        "depart_time": depart_at[11:16] if len(depart_at) >= 16 else None,
+        "stops": dest_data.get("number_of_changes", 0),
     }
 
 
-def _parse_duration(iso_duration: str) -> int:
-    """Parse PT10H30M → 630 minutes."""
-    import re
-    m = re.match(r"PT(?:(\d+)H)?(?:(\d+)M)?", iso_duration)
-    if not m:
-        return 0
-    hours = int(m.group(1) or 0)
-    minutes = int(m.group(2) or 0)
-    return hours * 60 + minutes
+def _compute_arrive_time(depart_time: str | None, duration_min: int) -> str | None:
+    if not depart_time or not duration_min:
+        return None
+    try:
+        base = datetime.strptime(depart_time, "%H:%M")
+        arrival = base + timedelta(minutes=duration_min)
+        return arrival.strftime("%H:%M")
+    except ValueError:
+        return None
 
 
-def _parse_kiwi_duration(s: str) -> int:
-    """Parse '10h 30m' or '10h' or '30m' → minutes."""
-    import re
-    m = re.search(r"(?:(\d+)h)?\s*(?:(\d+)m)?", s)
-    if not m:
-        return 0
-    return int(m.group(1) or 0) * 60 + int(m.group(2) or 0)
+def _load_existing_route(origin: str, destination: str) -> dict:
+    try:
+        store = get_store()
+        with store.open_session() as session:
+            raw = session.load(f"routes/{origin}-{destination}")
+        return doc_to_dict(raw) if raw is not None else {}
+    except Exception:
+        return {}
 
 
 def _write_to_ravendb(
-    origin: str, destination: str, result: dict, hubs: list[str], duration_min: int
+    origin: str,
+    destination: str,
+    price: float,
+    depart_date: str | None,
+    depart_time: str | None,
+    arrive_time: str | None,
+    existing: dict,
 ) -> None:
-    price = result["price_usd"]
     route = RouteDocument(
         origin=origin,
         destination=destination,
-        hubs=hubs,
+        hubs=existing.get("hubs", []),
         typical_price=TypicalPrice(
-            min=round(price * 0.9, 2),
-            max=round(price * 1.1, 2),
+            min=round(price * (1 - _PRICE_SPREAD), 2),
+            max=round(price * (1 + _PRICE_SPREAD), 2),
             currency="USD",
         ),
-        duration_avg_min=duration_min,
-        depart_date=result.get("depart_date"),
-        depart_time=result.get("depart_time"),
-        arrive_time=result.get("arrive_time"),
+        duration_avg_min=existing.get("duration_avg_min", 0),
+        depart_date=depart_date,
+        depart_time=depart_time,
+        arrive_time=arrive_time,
+        hidden_city_score=existing.get("hidden_city_score", 0.0),
+        hidden_city_via=existing.get("hidden_city_via"),
+        hidden_city_decoy=existing.get("hidden_city_decoy"),
+        hidden_city_risks=existing.get("hidden_city_risks", []),
         last_updated=datetime.now(timezone.utc),
     )
     try:
         store = get_store()
         data = route.model_dump(mode="json")
         data["@metadata"] = {"@collection": "Routes"}
-        store.get_request_executor().execute(PutDocumentCommand(key=route.route_id(), document=data))
+        store.get_request_executor().execute(
+            PutDocumentCommand(key=route.route_id(), document=data)
+        )
         log.info("Cached live price for %s→%s: $%s", origin, destination, price)
     except Exception:
         log.exception("Failed to cache price for %s→%s — continuing", origin, destination)
@@ -186,25 +122,41 @@ def _write_to_ravendb(
 async def get_live_price(
     origin: str,
     destination: str,
-    route_type: str,
     date: str | None = None,
 ) -> dict:
     origin = origin.upper()
     destination = destination.upper()
     if not date:
-        from datetime import timedelta
         date = (datetime.now(timezone.utc) + timedelta(days=7)).strftime("%Y-%m-%d")
 
-    if route_type == "hidden_city":
-        result = await _kiwi_search(origin, destination, date)
-        hubs = result.get("hubs", [])
-        duration_min = result.get("duration_min", 0)
-    else:
-        result = await _amadeus_search(origin, destination, date)
-        hubs = result.get("hubs", [])
-        duration_min = result.get("duration_min", 0)
+    existing = _load_existing_route(origin, destination)
+    result = await _travelpayouts_search(origin, destination, date)
 
-    if result.get("found"):
-        _write_to_ravendb(origin, destination, result, hubs, duration_min)
+    if not result.get("found"):
+        return result
 
-    return result
+    arrive_time = _compute_arrive_time(
+        result.get("depart_time"),
+        existing.get("duration_avg_min", 0),
+    )
+
+    _write_to_ravendb(
+        origin=origin,
+        destination=destination,
+        price=result["price_usd"],
+        depart_date=result.get("depart_date"),
+        depart_time=result.get("depart_time"),
+        arrive_time=arrive_time,
+        existing=existing,
+    )
+
+    return {
+        "found": True,
+        "price_usd": result["price_usd"],
+        "depart_date": result.get("depart_date"),
+        "depart_time": result.get("depart_time"),
+        "arrive_time": arrive_time,
+        "hubs": existing.get("hubs", []),
+        "duration_min": existing.get("duration_avg_min", 0),
+        "stops": result.get("stops", 0),
+    }
