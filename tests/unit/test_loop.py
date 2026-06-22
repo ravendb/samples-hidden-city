@@ -111,27 +111,36 @@ class TestRunAgent:
         assert captured_messages[3]["content"] == "New question"
 
     @pytest.mark.asyncio
-    async def test_token_warning_on_large_tool_result(self):
+    async def test_tool_result_truncated_when_over_budget(self):
         tool_response = _make_tool_use_response("search_routes", {"origin": "WAW"})
         end_response = _make_end_turn_response("Done.")
 
-        large_result = {"routes": [{"data": "x" * 4000}]}  # ~1000 tokens
+        large_result = {"routes": [{"data": "x" * 16000}]}  # ~4000 tokens
+        captured_tool_messages = []
+
+        async def mock_dispatch(name, tool_input):
+            return large_result
+
+        async def capture_create(**kwargs):
+            for m in kwargs["messages"]:
+                if m.get("role") == "tool":
+                    captured_tool_messages.append(m["content"])
+            if len(captured_tool_messages) == 0:
+                return tool_response
+            return end_response
 
         with (
             patch("src.agent.loop.AsyncOpenAI") as mock_client_cls,
-            patch(
-                "src.agent.loop.dispatch_tool",
-                new=AsyncMock(return_value=large_result),
-            ),
+            patch("src.agent.loop.dispatch_tool", side_effect=mock_dispatch),
         ):
             mock_client = AsyncMock()
             mock_client_cls.return_value = mock_client
-            mock_client.chat.completions.create = AsyncMock(
-                side_effect=[tool_response, end_response]
-            )
+            mock_client.chat.completions.create = AsyncMock(side_effect=capture_create)
             result = await run_agent(user_message="Search routes", prior_turns=[])
 
         assert len(result.tool_token_warnings) > 0
+        assert len(captured_tool_messages) == 1
+        assert len(captured_tool_messages[0]) <= 800 * 4 + 20
 
     @pytest.mark.asyncio
     async def test_max_iterations_raises(self):

@@ -43,6 +43,13 @@ def _estimate_tokens(text: str) -> int:
     return len(text) // 4
 
 
+def _truncate_tool_result(result_json: str, max_tokens: int = WARN_TOOL_TOKENS) -> str:
+    max_chars = max_tokens * 4
+    if len(result_json) <= max_chars:
+        return result_json
+    return result_json[:max_chars] + ' "…truncated"}'
+
+
 async def run_agent(
     user_message: str,
     prior_turns: list[dict],
@@ -127,6 +134,7 @@ async def run_agent(
                     warning = f"{tc.function.name} result ~{estimated} tokens (budget {WARN_TOOL_TOKENS})"
                     log.warning(warning)
                     token_warnings.append(warning)
+                    result_json = _truncate_tool_result(result_json)
 
                 tool_results.append({
                     "role": "tool",
@@ -231,6 +239,9 @@ async def stream_agent(
                 tool_input = json.loads(tc["arguments"])
                 result = await dispatch_tool(tc["name"], tool_input)
                 result_json = json.dumps(result, default=str)
+                if _estimate_tokens(result_json) > WARN_TOOL_TOKENS:
+                    log.warning("%s result over budget in stream", tc["name"])
+                    result_json = _truncate_tool_result(result_json)
                 tool_results.append({
                     "role": "tool",
                     "tool_call_id": tc["id"],

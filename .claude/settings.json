@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/unit/test_loop.py -v)",
+      "Bash(uv run *)",
+      "Bash(.venv\\\\Scripts\\\\python.exe -m pytest tests/unit/test_loop.py -v)",
+      "PowerShell(.venv\\\\Scripts\\\\python.exe -m pytest tests/unit/test_loop.py -v)"
+    ]
+  }
+}
