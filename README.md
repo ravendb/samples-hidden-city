@@ -166,7 +166,8 @@ covers the full cluster deployment.
 | **Docker** | 24+ | required | — | [docs.docker.com](https://docs.docker.com/get-docker/) |
 | **Docker Compose** | v2 (bundled with Docker Desktop) | required | — | bundled with Docker Desktop |
 | **kubectl** | 1.28+ | — | required | [kubernetes.io](https://kubernetes.io/docs/tasks/tools/) |
-| **Kubernetes cluster** | 1.28+ | — | required | kind / minikube / cloud provider |
+| **kind** | latest | — | required (local) | `winget install Kubernetes.kind` |
+| **Kubernetes cluster** | 1.28+ | — | required | kind (local, see below) / cloud provider |
 
 > **Windows note:** Docker Desktop on Windows requires either WSL 2 or Hyper-V.
 > Make sure one of these is enabled before installing Docker.
@@ -280,17 +281,71 @@ missing keys on first run. You can also fill them in manually:
 Without Amadeus credentials the agent falls back to fixture data seeded by
 `scripts/seed_local.py`. All demo scenarios work on fixture data.
 
-### Kubernetes
+### Kubernetes (local — kind)
+
+The fastest way to run the full Kubernetes stack locally, including the RavenDB
+Operator, is the included `start-k8s.ps1` script. It creates a local
+[kind](https://kind.sigs.k8s.io/) cluster, installs the operator, builds and
+loads the Docker image, deploys everything, and sets up port-forwards — one command:
+
+```powershell
+.\start-k8s.ps1
+```
+
+After everything is ready:
+
+| URL | What |
+|-----|------|
+| `http://localhost:8000` | Agent chat API |
+| `http://localhost:8000/docs` | Swagger UI |
+| `http://localhost:8080` | RavenDB Studio |
+
+Flags:
+
+```powershell
+.\start-k8s.ps1 -SkipBuild      # skip docker build (image already loaded into kind)
+.\start-k8s.ps1 -SkipOperator   # skip operator install (already installed)
+.\start-k8s.ps1 -DeleteCluster  # delete the kind cluster and exit
+```
+
+Press **Ctrl+C** to stop port-forwards. The cluster keeps running — subsequent
+runs with `-SkipBuild -SkipOperator` are fast (manifests reapplied, no rebuild).
+
+**Prerequisites for kind:**
+```powershell
+winget install Kubernetes.kind
+winget install Kubernetes.kubectl
+```
+Docker Desktop must be running.
+
+#### Show the operator in action
+
+```powershell
+# Watch the 3-node cluster come up
+kubectl get pods -n hidden-city -w
+
+# Check cluster status (operator sets Ready condition when Raft quorum is reached)
+kubectl get ravendbclusters -n hidden-city
+kubectl describe ravendbclusters ravendb-cluster -n hidden-city
+```
+
+### Kubernetes (cloud / CI)
 
 ```bash
-# Install RavenDB Operator (one-time)
+# Install RavenDB Operator (one-time per cluster)
 bash k8s/operator/install.sh
 
+# Copy and fill in secrets
+cp k8s/secrets.yaml k8s/secrets.local.yaml
+# edit k8s/secrets.local.yaml
+
 # Deploy everything
+kubectl apply -f k8s/secrets.local.yaml
 kubectl apply -k k8s/
 
 # Check status
 kubectl -n hidden-city get pods
+kubectl get ravendbclusters -n hidden-city
 ```
 
 ---
