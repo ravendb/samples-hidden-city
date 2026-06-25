@@ -85,7 +85,7 @@ Point to `ravendb-cluster-svc` as ClusterIP:
 ┌─────────────────────────────────┬─────────────────────────────────┐
 │         NAIVE BASELINE          │        RAVENDB IN-CLUSTER        │
 │                                 │                                  │
-│   Raw Amadeus → LLM prompt      │   Tool call → RavenDB → LLM      │
+│   Raw Travelpayouts → LLM prompt │   Tool call → RavenDB → LLM      │
 │                                 │                                  │
 │         40 000 tokens           │           1 500 tokens           │
 │   ████████████████████████░░    │   █░░░░░░░░░░░░░░░░░░░░░░░░░░   │

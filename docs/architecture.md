@@ -15,11 +15,11 @@ exactly where the money goes at each step.
 User
  │
  ▼
-Python script ──────────────────────────────▶ Amadeus API
-                                              (250 KB response)
+Python script ──────────────────────────────▶ Travelpayouts API
+                                              (bulk response, large JSON)
                     ┌────────────────┐
                     │  raw JSON      │   40 000–100 000 tokens
-                    │  stuffed into  │──▶ Anthropic API  $0.12/request
+                    │  stuffed into  │──▶ OpenAI API  $0.006/request
                     │  the prompt    │
                     └────────────────┘
 ```
@@ -27,8 +27,8 @@ Python script ──────────────────────
 **What happens:**
 
 1. User asks "cheap flights WAW→LHR".
-2. Script calls Amadeus `/v2/shopping/flight-offers`. Response: 250 KB of JSON
-   (offers, segments, pricing breakdowns, fare rules for 3 itineraries).
+2. Script calls Travelpayouts `/v2/prices/latest`. Response: large JSON with
+   hundreds of price records, routes, carriers.
 3. Entire response is pasted into the LLM prompt.
 4. Model answers. No history saved.
 5. Next question: repeat from step 2.
@@ -37,11 +37,11 @@ Python script ──────────────────────
 
 | Component | Calculation | Daily cost |
 |-----------|-------------|------------|
-| Amadeus calls | 1 000 × free tier | $0 |
-| LLM input tokens | 1 000 × 40 000 tok × $3/1M | **$120** |
-| LLM output tokens | 1 000 × 400 tok × $15/1M | $6 |
-| Egress (Amadeus → app) | 1 000 × 250 KB × $0.09/GB | $0.02 |
-| **Total** | | **~$126/day** |
+| Travelpayouts API calls | 1 000 × free tier | $0 |
+| LLM input tokens | 1 000 × 40 000 tok × $0.15/1M | **$6** |
+| LLM output tokens | 1 000 × 400 tok × $0.60/1M | $0.24 |
+| Egress (Travelpayouts → app) | 1 000 × 250 KB × $0.09/GB | $0.02 |
+| **Total** | | **~$6.26/day** |
 
 **Pain points:**
 
@@ -58,8 +58,8 @@ Python script ──────────────────────
 User
  │
  ▼
-Flask/FastAPI ──cache miss──▶ Amadeus API
-      │                       (250 KB, cached in Redis for 5 min)
+Flask/FastAPI ──cache miss──▶ Travelpayouts API
+      │                       (bulk response, cached in Redis for 5 min)
       │
       ├──▶ Redis (TTL cache)        outside the cluster
       │    returns 250 KB blob ─────────────────────────────────▶ LLM prompt
@@ -67,28 +67,28 @@ Flask/FastAPI ──cache miss──▶ Amadeus API
       └──▶ Postgres (sessions)      outside the cluster
            full history ────────────────────────────────────────▶ LLM prompt
 
-Celery worker ──every 5 min──▶ Amadeus (polling)
+Celery worker ──every 5 min──▶ Travelpayouts (polling)
 ```
 
 **What happens:**
 
-- Redis stores raw API responses with a 5-min TTL. Cache hits skip Amadeus but
-  still send the full 250 KB blob to the LLM.
+- Redis stores raw API responses with a 5-min TTL. Cache hits skip Travelpayouts
+  but still send the full bulk blob to the LLM.
 - Postgres stores conversation turns. At the start of each turn, the agent reads
   the last N turns and appends them to the prompt.
-- Celery polls Amadeus every 5 minutes per watched route (price watch feature).
+- Celery polls Travelpayouts every 5 minutes per watched route (price watch feature).
 
 **Cost at 1 000 requests/day (assuming 40 % cache hit rate):**
 
 | Component | Calculation | Daily cost |
 |-----------|-------------|------------|
-| Amadeus calls | 600 × misses | free tier |
-| LLM input tokens | 1 000 × 35 000 avg tok × $3/1M | **$105** |
+| Travelpayouts calls | 600 × misses | free tier |
+| LLM input tokens | 1 000 × 35 000 avg tok × $0.15/1M | **$5.25** |
 | Redis managed (AWS ElastiCache r7g.large) | — | **$100/month** |
 | Postgres managed (RDS t4g.medium) | — | **$60/month** |
 | Celery workers (2 × t3.small) | — | **$30/month** |
 | Cross-AZ egress (app ↔ Redis ↔ RDS) | 1 000 × 250 KB × $0.01/GB (intra-AZ) | ~$0 |
-| **Total LLM** | | **~$105/day** |
+| **Total LLM** | | **~$5.49/day** |
 | **Total infra** | | **~$190/month** |
 
 **Pain points:**
@@ -131,14 +131,14 @@ Kafka ──price events──▶ consumer pod ──▶ ES update ──▶ age
 
 | Component | Calculation | Daily cost |
 |-----------|-------------|------------|
-| LLM input tokens | 1 000 × 20 000 avg tok × $3/1M | **$60** |
+| LLM input tokens | 1 000 × 20 000 avg tok × $0.15/1M | **$3** |
 | Elasticsearch (AWS managed, 2-node) | — | **$350/month** |
 | RDS Postgres + pgvector (db.r6g.large) | — | **$180/month** |
 | ElastiCache Redis | — | **$100/month** |
 | MSK Kafka (3-broker) | — | **$500/month** |
 | Kafka consumer pods (2 × t3.medium) | — | **$60/month** |
 | Cross-service egress (app ↔ ES ↔ RDS) | 1 000 × 70 KB × $0.09/GB | $0.006 |
-| **Total LLM** | | **~$60/day** |
+| **Total LLM** | | **~$3.24/day** |
 | **Total infra** | | **~$1,190/month** |
 
 **Pain points:**
@@ -155,7 +155,7 @@ Kafka ──price events──▶ consumer pod ──▶ ES update ──▶ age
 ## Stage 4 — K8s + RavenDB In-Cluster (This Demo)
 
 ```
-User ──prompt only──▶ Agent (FastAPI, k8s) ──▶ Anthropic API
+User ──prompt only──▶ Agent (FastAPI, k8s) ──▶ OpenAI API
                            │                    ▲
                            │  tool call          │  ~1 500 tokens
                            ▼                    │
@@ -168,8 +168,8 @@ User ──prompt only──▶ Agent (FastAPI, k8s) ──▶ Anthropic API
                            ▲                    ▲
                   cache miss │                  │ bulk ingest (6h CronJob)
                            │                  │
-                      Kiwi / Amadeus    Travelpayouts
-                      (live API, rare)   (bulk prices)
+                      Travelpayouts        Travelpayouts
+                      (live, ~5% miss)      (bulk prices)
 ```
 
 **What happens (cache hit — zero egress):**
@@ -186,9 +186,9 @@ User ──prompt only──▶ Agent (FastAPI, k8s) ──▶ Anthropic API
 
 1. `search_routes` returns `stale: true`.
 2. Agent calls `get_live_price(origin="WAW", destination="LHR", route_type="direct")`.
-3. Amadeus is called once. Result is written back to RavenDB.
+3. Travelpayouts live API is called once. Result is written back to RavenDB.
 4. Same 1 500 token LLM call.
-5. Next user asking the same route hits the cache — zero Amadeus calls.
+5. Next user asking the same route hits the cache — zero Travelpayouts calls.
 
 **What happens (price drop alert — zero polling):**
 
@@ -207,36 +207,36 @@ no polling loop, no message broker.
 
 | Component | Calculation | Daily cost |
 |-----------|-------------|------------|
-| LLM input tokens | 1 000 × 1 500 tok × $3/1M | **$4.50** |
-| LLM output tokens | 1 000 × 400 tok × $15/1M | $6.00 |
-| Amadeus calls (cache miss, ~5 %) | 50 × free tier | $0 |
+| LLM input tokens | 1 000 × 1 500 tok × $0.15/1M | **$0.225** |
+| LLM output tokens | 1 000 × 400 tok × $0.60/1M | $0.24 |
+| Travelpayouts calls (cache miss, ~5 %) | 50 × free tier | $0 |
 | RavenDB (3-node cluster, k8s, 3 × t3.medium) | — | **$90/month** |
 | Egress (prompt only, 0.1 KB/req) | 1 000 × 0.1 KB × $0.09/GB | ~$0 |
-| **Total LLM** | | **~$10.50/day** |
+| **Total LLM** | | **~$0.47/day** |
 | **Total infra** | | **~$90/month** |
 
 ---
 
 ## Summary Cost Comparison
 
-### Per-request cost (LLM tokens only, claude-sonnet-4-20250514)
+### Per-request cost (LLM tokens only, gpt-4o-mini)
 
 | Stage | Input tokens | Input cost | Output tokens | Output cost | Total/req |
 |-------|-------------|------------|---------------|-------------|-----------|
-| 1 — Naive | 40 000 | $0.1200 | 400 | $0.0060 | **$0.126** |
-| 2 — Redis+Postgres | 35 000 | $0.1050 | 400 | $0.0060 | **$0.111** |
-| 3 — ES+pgvector+Kafka | 20 000 | $0.0600 | 400 | $0.0060 | **$0.066** |
-| 4 — RavenDB in-cluster | 1 500 | $0.0045 | 400 | $0.0060 | **$0.011** |
+| 1 — Naive | 40 000 | $0.0060 | 400 | $0.00024 | **$0.0062** |
+| 2 — Redis+Postgres | 35 000 | $0.0053 | 400 | $0.00024 | **$0.0055** |
+| 3 — ES+pgvector+Kafka | 20 000 | $0.0030 | 400 | $0.00024 | **$0.0032** |
+| 4 — RavenDB in-cluster | 1 500 | $0.00023 | 400 | $0.00024 | **$0.0005** |
 
-*Pricing: $3.00/1M input tokens, $15.00/1M output tokens (claude-sonnet-4-20250514, 2025)*
+*Pricing: $0.15/1M input tokens, $0.60/1M output tokens (gpt-4o-mini, 2025)*
 
 ### Daily cost at scale
 
 | Scale | Stage 1 | Stage 2 | Stage 3 | Stage 4 | Stage 1 → 4 saving |
 |-------|---------|---------|---------|---------|---------------------|
-| 1 000 req/day | $126 | $105 | $60 | **$10.50** | **$115.50/day** |
-| 10 000 req/day | $1,260 | $1,050 | $600 | **$105** | **$1,155/day** |
-| 100 000 req/day | $12,600 | $10,500 | $6,000 | **$1,050** | **$11,550/day** |
+| 1 000 req/day | $6.26 | $5.49 | $3.24 | **$0.47** | **$5.79/day** |
+| 10 000 req/day | $62.6 | $54.9 | $32.4 | **$4.65** | **$57.9/day** |
+| 100 000 req/day | $626 | $549 | $324 | **$46.5** | **$579/day** |
 
 ### Infrastructure overhead (monthly, HA deployment)
 
@@ -272,7 +272,8 @@ assistant_response ≤  400 tokens  (max_tokens parameter)
 Total             ≈ 1 500 tokens  per turn
 ```
 
-The raw Amadeus response for a typical 3-offer search is ~200 KB / 40 000 tokens.
+The raw Travelpayouts bulk response for a typical route query is large JSON with
+hundreds of price records — easily 40 000+ tokens when pasted unfiltered into a prompt.
 `search_routes` filters it to origin, destination, hubs, price range, and hidden
 city score — roughly 5 fields × 5 routes = ~300 tokens. The model never sees the
 raw response.
@@ -310,7 +311,7 @@ One `kubectl apply` is all that is needed. The operator handles everything else.
 
 ## Demo Script
 
-1. **Show Stage 1** — run `scripts/measure_tokens.py` against a raw Amadeus call.
+1. **Show Stage 1** — run `scripts/measure_tokens.py` against a raw Travelpayouts API call.
    Point at the 40 000 token number.
 
 2. **Show Stage 4** — run `scripts/measure_tokens.py` against the agent.

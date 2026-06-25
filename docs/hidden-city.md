@@ -37,7 +37,7 @@ constraints:      carry_on_only, max_stops, max_duration_min
 ### Step 1 — Find the direct price
 
 Query RavenDB for `routes/{origin}-{real_destination}`. If stale (> 2h),
-call `get_live_price` (Amadeus) to refresh. This is `price_direct`.
+call `get_live_price` (Travelpayouts) to refresh. This is `price_direct`.
 
 ### Step 2 — Find routes through real_destination to anywhere
 
