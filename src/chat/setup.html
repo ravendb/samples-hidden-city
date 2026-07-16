@@ -183,15 +183,15 @@ html, body {
       <span class="step-eyebrow">Step 1 of 3</span>
       <h1 class="step-title">Welcome to the demo</h1>
       <p class="step-desc">
-        This wizard takes 2 minutes. You'll need an <strong>Anthropic API key</strong>
-        and a free <strong>RavenDB license</strong>. Both links are provided below.
+        This wizard takes 2 minutes. You'll need an <strong>OpenAI API key</strong>
+        and a free <strong>RavenDB license</strong>.
       </p>
     </div>
 
     <div class="info-box">
       <span class="info-icon">💡</span>
       <span>
-        The agent sends <em>only your prompt</em> to Anthropic. All flight data and
+        The agent sends <em>only your prompt</em> to OpenAI. All flight data and
         conversation memory stay inside the cluster — that's the whole point.
       </span>
     </div>
@@ -204,15 +204,23 @@ html, body {
     </div>
   </div>
 
-  <!-- ─── Step 1: Anthropic API key ─── -->
+  <!-- ─── Step 1: OpenAI API key ─── -->
   <div class="step" id="step-1">
     <div class="step-header">
       <span class="step-eyebrow">Step 2 of 3</span>
-      <h1 class="step-title">Anthropic API key</h1>
+      <h1 class="step-title">OpenAI API key</h1>
       <p class="step-desc">
-        Used to call <code style="background:var(--surface2);padding:1px 5px;border-radius:4px">claude-sonnet-4-20250514</code>.
+        Used to call <code style="background:var(--surface2);padding:1px 5px;border-radius:4px">gpt-4o-mini</code>.
         Only your prompt is sent outbound — no context payload.
       </p>
+    </div>
+
+    <div class="info-box" id="openai-key-status" style="display:none">
+      <span class="info-icon">✅</span>
+      <span>
+        An <code>OPENAI_API_KEY</code> is already configured in your environment.
+        Click <strong>Skip</strong> to continue, or enter a new key below to replace it.
+      </span>
     </div>
 
     <div class="field">
@@ -221,16 +229,16 @@ html, body {
         <span class="tooltip-wrap">
           <span class="tooltip-trigger" onclick="this.parentElement.classList.toggle('open')">?</span>
           <span class="tooltip-bubble">
-            Get your key at <strong>console.anthropic.com → API Keys</strong>.
-            It starts with <code>sk-ant-</code>. Keep it secret — it's stored
+            Get your key at <strong>platform.openai.com → API Keys</strong>.
+            It starts with <code>sk-</code>. Keep it secret — it's stored
             locally in <code>.env.local</code> and never sent to a third party.
           </span>
         </span>
       </label>
-      <input type="password" id="anthropic-key" placeholder="sk-ant-api03-…"
-        oninput="validateAnthropicKey(this)" autocomplete="off" />
+      <input type="password" id="openai-key" placeholder="sk-…"
+        oninput="validateOpenAIKey(this)" autocomplete="off" />
       <span class="field-hint">
-        Don't have one? <a href="https://console.anthropic.com" target="_blank" rel="noreferrer">Get one free at console.anthropic.com →</a>
+        Don't have one? <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer">Get one at platform.openai.com →</a>
       </span>
     </div>
 
@@ -249,6 +257,7 @@ html, body {
         <span class="btn-text">Next →</span>
         <div class="spinner"></div>
       </button>
+      <button class="btn btn-ghost" id="skip-key-btn" style="display:none" onclick="goTo(2)">Skip</button>
       <button class="btn-back" onclick="goTo(0)">← Back</button>
     </div>
   </div>
@@ -330,7 +339,7 @@ function goTo(n) {
   document.getElementById('dot-' + currentStep).classList.remove('done');
 }
 
-function validateAnthropicKey(input) {
+function validateOpenAIKey(input) {
   const v = input.value.trim();
   const btn = document.getElementById('btn-1');
   if (v.length > 10) {
@@ -341,10 +350,26 @@ function validateAnthropicKey(input) {
   } else {
     input.classList.remove('valid');
     if (v.length > 0) input.classList.add('invalid');
-    btn.disabled = true;
+    btn.disabled = openaiKeyAlreadySet ? false : true;
     btn.classList.remove('pulse');
   }
 }
+
+let openaiKeyAlreadySet = false;
+
+async function checkSetupStatus() {
+  try {
+    const res = await fetch('/api/setup/status');
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.openai_api_key_set) {
+      openaiKeyAlreadySet = true;
+      document.getElementById('openai-key-status').style.display = 'flex';
+      document.getElementById('skip-key-btn').style.display = 'inline-flex';
+    }
+  } catch (_) {}
+}
+checkSetupStatus();
 
 function validateLicense(input) {
   const v = input.value.trim();
@@ -379,7 +404,7 @@ function clearError(stepN) {
 
 async function submitStep1() {
   clearError(1);
-  const key = document.getElementById('anthropic-key').value.trim();
+  const key = document.getElementById('openai-key').value.trim();
   if (!key) return;
 
   setLoading('btn-1', true);
@@ -387,7 +412,7 @@ async function submitStep1() {
     const res = await fetch('/api/setup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ anthropic_api_key: key }),
+      body: JSON.stringify({ openai_api_key: key }),
     });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));

@@ -12,7 +12,7 @@ Hidden city to trик cenowy — lot WAW→JFK przez LHR kosztuje 1650 PLN, a be
 Ale wróćmy do infrastruktury. Żeby agent mógł odpowiedzieć na takie pytanie, musi mieć kontekst: ceny tras, historię rozmowy, preferencje użytkownika. Skąd to dostaje?
 
 ETAP 1 — Naiwne podejście (~3 min)
-Najprościej: wywołujesz API Amadeus, dostajesz odpowiedź — 250 KB JSONa z ofertami, segmentami, fareami, regułami taryf. Wrzucasz to wszystko do prompta LLM i pytasz "co o tym myślisz?"
+Najprościej: wywołujesz API Travelpayouts, dostajesz odpowiedź — 250 KB JSONa z ofertami, segmentami, fareami, regułami taryf. Wrzucasz to wszystko do prompta LLM i pytasz "co o tym myślisz?"
 
 Wynik: 40 000–100 000 tokenów na jedno zapytanie. Przy cenie $3 za milion tokenów input, to $0.12 za request. Przy 1000 zapytań dziennie — $126/dzień. Przy 10 000 — $1260/dzień.
 
@@ -30,7 +30,7 @@ A teraz to samo, ale inaczej.
 
 (pokaż diagram architektury)
 
-Agent działa w Kubernetes. RavenDB działa w tym samym klastrze — jako operator, trzy nody, HA out of the box. Dane przylatują z Travelpayouts co 6 godzin przez CronJob. Live ceny z Amadeus — tylko na cache miss, co zdarza się w ~5% przypadków.
+Agent działa w Kubernetes. RavenDB działa w tym samym klastrze — jako operator, trzy nody, HA out of the box. Dane przylatują z Travelpayouts co 6 godzin przez CronJob. Live ceny z Travelpayouts — tylko na cache miss, co zdarza się w ~5% przypadków.
 
 Użytkownik pyta o loty. Agent nie wkłada danych do prompta. Zamiast tego model wywołuje narzędzie — search_routes(). RavenDB odpowiada lokalnie: pre-strukturyzowany dokument z origin, destination, ceną, hidden city score. Około 400 tokenów. Tool result wraca do tego samego API call.
 

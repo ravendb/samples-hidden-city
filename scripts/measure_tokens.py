@@ -1,7 +1,7 @@
 """
 Measures actual token usage per agent request and compares against the naive baseline.
 
-Naive baseline: full Amadeus flight-offers response for a typical route search
+Naive baseline: full Travelpayouts flight-offers response for a typical route search
 is ~40k-100k tokens. We estimate 50k as the baseline.
 
 Run the agent via docker-compose before using this script.
@@ -18,7 +18,7 @@ import httpx
 log = logging.getLogger(__name__)
 
 AGENT_URL = "http://localhost:8000"
-NAIVE_BASELINE_TOKENS = 50_000  # conservative estimate for raw Amadeus response
+NAIVE_BASELINE_TOKENS = 50_000  # conservative estimate for raw Travelpayouts response
 
 TEST_QUERIES = [
     {

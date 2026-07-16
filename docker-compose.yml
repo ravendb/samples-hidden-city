@@ -7,7 +7,7 @@ services:
     environment:
       RAVEN_ARGS: "--Setup.Mode=None"
       RAVEN_Security_UnsecuredAccessAllowed: "PrivateNetwork"
-      RAVEN_License: ${RAVEN_LICENSE:-}
+      RAVEN_License: ${RAVENDB_LICENSE:-}
     volumes:
       - ravendb-data:/var/lib/ravendb/data
     healthcheck:

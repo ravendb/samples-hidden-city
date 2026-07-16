@@ -18,7 +18,7 @@ conversation.
 
 | Step | What the agent does | Cost |
 |------|---------------------|------|
-| User asks about flights | Agent calls Amadeus flight-offers API | 250 KB response, €0.04 egress |
+| User asks about flights | Agent calls Travelpayouts flight-offers API | 250 KB response, €0.04 egress |
 | Agent summarises results for the LLM | Full JSON sent in the prompt | ~40 000 tokens ≈ $0.48 per turn |
 | User asks a follow-up | Same API call again | Another 250 KB, another $0.48 |
 | Price watch (polling) | CronJob hits API every 5 min | 288 API calls/day per route |
@@ -40,7 +40,7 @@ User → Agent (FastAPI) ──tool call──▶ search_routes ──▶ RavenD
                                                               │ cache hit → return
                                                               │ cache miss
                                                               ▼
-                                                    Kiwi / Amadeus API
+                                                    Kiwi / Travelpayouts API
                                                     (write-back to RavenDB)
 
 Price drops → RavenDB Subscription ──push──▶ Worker → alert
@@ -59,12 +59,12 @@ Price drops → RavenDB Subscription ──push──▶ Worker → alert
 \*AWS us-east-1 egress pricing, $0.09/GB.
 
 **How these numbers are calculated:**
-- Token baseline: raw Amadeus `/v2/shopping/flight-offers` response for 3 offers
+- Token baseline: raw Travelpayouts flight-offers response for 3 offers
   across a popular route is ~40 000 tokens (JSON verbosity). We measured with
   `tiktoken` on actual API responses; see `scripts/measure_token_cost.py`.
 - Token budget with RavenDB: system prompt 200 + user message 100 + tool result
   800 + assistant response 400 = 1 500 tokens. Capped in `src/agent/loop.py`.
-- Egress: `curl -o /dev/null -w "%{size_download}"` on Amadeus vs a RavenDB
+- Egress: `curl -o /dev/null -w "%{size_download}"` on Travelpayouts vs a RavenDB
   document fetch. See `scripts/measure_egress.py`.
 - Price watch: polling every 5 min = 288 calls/day. RavenDB Data Subscriptions
   push on change — zero polling.
@@ -110,16 +110,16 @@ database message.
 
 ### Stage 1 — Laptop / No persistence  *(~2021)*
 ```
-User → Python script → Amadeus API → print results
+User → Python script → Travelpayouts API → print results
 ```
 - Every run re-fetches everything from the internet.
 - No memory between calls; no conversation history.
-- Cost: Amadeus free tier, but 100 % cache-miss rate.
+- Cost: Travelpayouts free tier, but 100 % cache-miss rate.
 - **Pain:** 40 000+ tokens per query × every query. Demo breaks on API rate limits.
 
 ### Stage 2 — Shared Redis + Postgres  *(~2022–2023)*
 ```
-User → Flask app → Redis (TTL cache) → Amadeus
+User → Flask app → Redis (TTL cache) → Travelpayouts
                  → Postgres (conversation history)
                  → Celery worker (polling cron)
 ```
@@ -143,7 +143,7 @@ User → FastAPI → Elasticsearch (routes) + pgvector (embeddings) + Redis
 ### Stage 4 — RavenDB in-cluster  *(this repo)*
 ```
 User → FastAPI → RavenDB (routes + sessions + subscriptions)
-               → Kiwi / Amadeus (cache-miss only)
+               → Kiwi / Travelpayouts (cache-miss only)
 ```
 - One database replaces Redis, Postgres, Elasticsearch, and Kafka.
 - Subscriptions replace polling and the message broker entirely.
@@ -232,6 +232,11 @@ uv pip list                       # list installed packages
 
 ## How to Run It
 
+> **Before you start:** the agent needs an **OpenAI API key** (`OPENAI_API_KEY`) to run
+> at all, and a free **RavenDB license** (`RAVENDB_LICENSE`) for RavenDB. The setup
+> wizard at `/setup` walks you through both — see
+> [Environment variables](#environment-variables) below if you'd rather set them manually.
+
 ### Local (docker-compose)
 
 The fastest way is the included start script — it handles `.env`, RavenDB health
@@ -273,12 +278,12 @@ missing keys on first run. You can also fill them in manually:
 | Variable | Required | Where to get it |
 |----------|----------|-----------------|
 | `OPENAI_API_KEY` | **Yes** — agent won't start without it | [platform.openai.com](https://platform.openai.com/) → API Keys |
-| `AMADEUS_CLIENT_ID` + `AMADEUS_CLIENT_SECRET` | No — fixture data used as fallback | [developers.amadeus.com](https://developers.amadeus.com/) → My Apps → create app, free test tier |
-| `TRAVELPAYOUTS_TOKEN` | No — only needed for bulk scraper CronJob | [app.travelpayouts.com/profile](https://app.travelpayouts.com/profile/) → Aviasales Data API token |
+| `RAVENDB_LICENSE` | **Yes** — free Community license | [ravendb.net/download](https://ravendb.net/download) → register with your email, paste the `.json` license contents |
+| `TRAVELPAYOUTS_TOKEN` | No — used for live price refresh and the bulk scraper CronJob | [app.travelpayouts.com/profile](https://app.travelpayouts.com/profile/) → Aviasales Data API token |
 | `RAVENDB_URL` | Yes | `http://localhost:8080` for local dev (already set in `.env.example`) |
 | `RAVENDB_DATABASE` | Yes | `hidden-city` (already set in `.env.example`) |
 
-Without Amadeus credentials the agent falls back to fixture data seeded by
+Without a Travelpayouts token the agent falls back to fixture data seeded by
 `scripts/seed_local.py`. All demo scenarios work on fixture data.
 
 ### Kubernetes (local — kind)
@@ -380,7 +385,7 @@ Or use the Swagger UI at http://localhost:8000/docs.
 Chongqing (IATA: `CKG`) is not in the fixture data, so the agent will:
 1. Call `search_routes(origin="WAW", destination="CKG")` — returns empty.
 2. Call `get_live_price(origin="WAW", destination="CKG", route_type="hidden_city")`
-   — hits Amadeus if credentials are set, otherwise returns `found: false`.
+   — hits Travelpayouts if a token is set, otherwise returns `found: false`.
 3. Explain that no routes were found and suggest nearby hubs (IST, DOH, DXB are
    common transfer points for Central Asia).
 

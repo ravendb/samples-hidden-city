@@ -30,7 +30,7 @@ with every user. RavenDB inside the cluster makes retrieval a local call.
 ```
 Travelpayouts ──(CronJob, 6h)──→ RavenDB (in-cluster)
                                       ↑ ↑
-Kiwi / Amadeus ←──(cache miss)── Agent │ └── tool results
+Kiwi / Travelpayouts ←──(cache miss)── Agent │ └── tool results
                                       │
 User → Chat UI ──────────────────→ Agent (FastAPI)
                                       │
@@ -46,7 +46,7 @@ and when. Nothing is blindly injected. Only the user's prompt leaves the cluster
 | Scenario     | What happens                                                         | Egress |
 |--------------|----------------------------------------------------------------------|--------|
 | Cache hit    | Route + price already in RavenDB, agent retrieves locally            | Zero   |
-| Cache miss   | Agent triggers live Amadeus call, result written to RavenDB, served  | One    |
+| Cache miss   | Agent triggers live Travelpayouts call, result written to RavenDB, served  | One    |
 | Price watch  | RavenDB Subscription pushes price change to agent — no polling       | Zero   |
 
 ## Stack
@@ -56,7 +56,7 @@ and when. Nothing is blindly injected. Only the user's prompt leaves the cluster
 - **Operator**: RavenDB Kubernetes Operator (`RavenDBCluster` CRD)
 - **Agent**: Python + FastAPI
 - **ETL**: RavenDB Subscriptions (Kafka only if multi-source ingestion needed)
-- **Flight APIs**: Kiwi Tequila (live search, hidden city), Amadeus (direct prices, 400+ airlines), Travelpayouts (bulk cached prices, scraped every 6h)
+- **Flight APIs**: Kiwi Tequila (live search, hidden city), Travelpayouts (direct prices + bulk cached prices, scraped every 6h)
 - **Language**: Python (agent, tools, scraper, worker), C# or Python (RavenDB client)
 - **LLM**: claude-sonnet-4-20250514 via Anthropic API — only the user prompt goes outbound
 
@@ -194,7 +194,7 @@ The model must call RavenDB explicitly as a tool — it decides what to fetch.
 | Tool                 | Description                                                              |
 |----------------------|--------------------------------------------------------------------------|
 | `search_routes`      | Vector + doc query against RavenDB: origin, dest, date, stops, price, semantic similarity |
-| `get_live_price`     | Live call to Kiwi Tequila (hidden city) or Amadeus (direct) on cache miss |
+| `get_live_price`     | Live call to Kiwi Tequila (hidden city) or Travelpayouts (direct) on cache miss |
 | `get_user_profile`   | Read user profile and preferences from RavenDB attachments               |
 | `save_conversation`  | Persist the current turn to RavenDB after each exchange                  |
 
@@ -209,7 +209,7 @@ Outbound payload = system_prompt + user_message + tool_results
                  ≈ 200 + 100 + 800 tokens ≈ 1500 tokens max
 ```
 
-Raw Amadeus response (typically 40k–100k tokens) never reaches the model.
+Raw Travelpayouts response (typically 40k–100k tokens) never reaches the model.
 
 ## Hidden City Detection Logic
 
@@ -264,7 +264,7 @@ the drop-in replacement — the agent tool interface does not change.
 | **Total**           | **~1500**  |
 
 This is the core demo metric. Enforce it, measure it, show it on screen.
-The naive baseline (raw Amadeus response in prompt) runs 40k–100k tokens per call.
+The naive baseline (raw Travelpayouts response in prompt) runs 40k–100k tokens per call.
 
 ## Conversation Memory
 
@@ -297,7 +297,7 @@ Conversation state is a RavenDB document (`sessions/...`), not pod RAM, not Redi
 
 ## What NOT to Do
 
-- Never pass raw Amadeus API response to the model — always filter through tools
+- Never pass raw Travelpayouts API response to the model — always filter through tools
 - Never hardcode API keys or credentials — use k8s Secrets
 - Never use sidecar injection to blindly push context into every prompt — agent tools only
 - Never store conversation memory in pod RAM or a Redis sidecar — use RavenDB
@@ -325,7 +325,7 @@ concrete cost breakdown. RavenDB appears as the final step, not the starting
 assumption. LLM inference stays external (Anthropic API) throughout all three
 stages — the savings come from what we stop sending, not from where inference runs.
 
-1. **No k8s, naive DB** — full Amadeus response stuffed into every prompt, paying for 100k tokens/call, high Anthropic bill
+1. **No k8s, naive DB** — full Travelpayouts response stuffed into every prompt, paying for 100k tokens/call, high Anthropic bill
 2. **K8s, still external DB** — containerized but retrieval still crosses cluster boundary on every request
 3. **K8s + RavenDB in-cluster via Operator** — retrieval is local, 1500 tokens/call to Anthropic, near-zero egress on context
 

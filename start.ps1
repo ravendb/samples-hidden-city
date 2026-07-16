@@ -101,7 +101,7 @@ if (-not (Test-Path "$root\.env")) {
 }
 
 if (Test-Path "$root\license.json") {
-    $env:RAVEN_LICENSE = Get-Content "$root\license.json" -Raw
+    $env:RAVENDB_LICENSE = Get-Content "$root\license.json" -Raw
     Write-Ok "License loaded from license.json"
 } else {
     Write-Warn "license.json not found -- RavenDB will run in Developer mode (3 GB limit, 1 node)."
@@ -113,8 +113,6 @@ $envLines = Get-Content "$root\.env"
 
 $keysInfo = @(
     @{ Key = "OPENAI_API_KEY";        Desc = "OpenAI API key (agent won't start without it)";      Required = $true  },
-    @{ Key = "AMADEUS_CLIENT_ID";     Desc = "Amadeus client ID (optional, live direct prices)";   Required = $false },
-    @{ Key = "AMADEUS_CLIENT_SECRET"; Desc = "Amadeus client secret";                              Required = $false },
     @{ Key = "TRAVELPAYOUTS_TOKEN";   Desc = "Travelpayouts / Aviasales Data API token (optional, bulk scraper)"; Required = $false }
 )
 

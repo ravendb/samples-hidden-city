@@ -110,11 +110,20 @@ async def ui() -> HTMLResponse:
 
 
 class SetupRequest(BaseModel):
-    anthropic_api_key: str | None = None
+    openai_api_key: str | None = None
     ravendb_license: str | None = None
 
 
 _ENV_LOCAL = Path(__file__).parent.parent.parent / ".env.local"
+
+
+@app.get("/api/setup/status")
+async def api_setup_status() -> dict:
+    """Report which setup keys are already configured, so the wizard can skip them."""
+    return {
+        "openai_api_key_set": bool(os.getenv("OPENAI_API_KEY")),
+        "ravendb_license_set": bool(os.getenv("RAVENDB_LICENSE")),
+    }
 
 
 @app.post("/api/setup")
@@ -129,9 +138,9 @@ async def api_setup(body: SetupRequest) -> dict:
                 k, _, v = line.partition("=")
                 existing[k.strip()] = v.strip()
 
-    if body.anthropic_api_key:
-        existing["ANTHROPIC_API_KEY"] = body.anthropic_api_key
-        os.environ["ANTHROPIC_API_KEY"] = body.anthropic_api_key
+    if body.openai_api_key:
+        existing["OPENAI_API_KEY"] = body.openai_api_key
+        os.environ["OPENAI_API_KEY"] = body.openai_api_key
 
     if body.ravendb_license:
         existing["RAVENDB_LICENSE"] = body.ravendb_license

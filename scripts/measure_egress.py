@@ -1,7 +1,7 @@
 """
 Measures outbound bytes per agent request and compares against the naive baseline.
 
-Naive baseline: if you sent the raw Amadeus flight-offers response directly to
+Naive baseline: if you sent the raw Travelpayouts flight-offers response directly to
 the LLM API on every request, ~250 KB leaves the cluster per call.
 
 Optimised: only the user prompt leaves the cluster (~0.1 KB). RavenDB context
@@ -27,7 +27,7 @@ log = logging.getLogger(__name__)
 
 AGENT_URL = "http://localhost:8000"
 
-# Amadeus /v2/shopping/flight-offers for a typical route returns ~200-300 KB.
+# Travelpayouts /v1/prices/cheap for a typical route returns ~200-300 KB.
 # We use 250 KB (250,000 bytes) as the naive baseline.
 NAIVE_EGRESS_BYTES = 250_000
 BYTES_PER_TOKEN = 4  # rough approximation
@@ -93,7 +93,7 @@ async def run() -> None:
         print("-" * 80)
         print(f"{'Average':<40} {avg_opt:>12,} {avg_naive:>12,} {avg_reduction:>9.0f}%")
 
-        print(f"\nNaive baseline:  {NAIVE_EGRESS_BYTES / 1024:.0f} KB/request (raw Amadeus response)")
+        print(f"\nNaive baseline:  {NAIVE_EGRESS_BYTES / 1024:.0f} KB/request (raw Travelpayouts response)")
         print(f"Optimised avg:   {avg_opt / 1024:.1f} KB/request (prompt only to Anthropic)")
         print(f"Retrieval egress: 0 KB (RavenDB is in-cluster — local tool calls)")
 
