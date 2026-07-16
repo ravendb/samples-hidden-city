@@ -292,11 +292,11 @@ html, body {
       </span>
     </div>
 
-    <div class="info-box" id="license-skip-info">
-      <span class="info-icon">⚡</span>
+    <div class="info-box" id="license-skip-info" style="display:none">
+      <span class="info-icon">✅</span>
       <span>
-        Already have <code>RAVENDB_LICENSE</code> set in your environment or
-        running RavenDB locally? Click <strong>Skip</strong>.
+        A RavenDB license was found locally (<code>license.json</code> or
+        <code>RAVENDB_LICENSE</code>). Click <strong>Skip</strong> to continue.
       </span>
     </div>
 
@@ -366,6 +366,9 @@ async function checkSetupStatus() {
       openaiKeyAlreadySet = true;
       document.getElementById('openai-key-status').style.display = 'flex';
       document.getElementById('skip-key-btn').style.display = 'inline-flex';
+    }
+    if (data.ravendb_license_set) {
+      document.getElementById('license-skip-info').style.display = 'flex';
     }
   } catch (_) {}
 }

@@ -10,7 +10,11 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
 
+_ENV_LOCAL = Path(__file__).parent.parent.parent / ".env.local"
+_LICENSE_FILE = Path(__file__).parent.parent.parent / "license.json"
+
 load_dotenv(override=True)
+load_dotenv(_ENV_LOCAL, override=True)
 from pydantic import BaseModel
 
 from src.agent.loop import AgentResult, run_agent, stream_agent
@@ -114,15 +118,12 @@ class SetupRequest(BaseModel):
     ravendb_license: str | None = None
 
 
-_ENV_LOCAL = Path(__file__).parent.parent.parent / ".env.local"
-
-
 @app.get("/api/setup/status")
 async def api_setup_status() -> dict:
     """Report which setup keys are already configured, so the wizard can skip them."""
     return {
         "openai_api_key_set": bool(os.getenv("OPENAI_API_KEY")),
-        "ravendb_license_set": bool(os.getenv("RAVENDB_LICENSE")),
+        "ravendb_license_set": bool(os.getenv("RAVENDB_LICENSE")) or _LICENSE_FILE.exists(),
     }
 
 
