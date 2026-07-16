@@ -2,6 +2,7 @@
 update_user_profile tool — persists durable user preferences to RavenDB.
 
 Call this when the user expresses a preference that should carry across sessions:
+  "Call me Alex"                         → name="Alex"
   "I always travel carry-on only"        → carry_on_only=True
   "I'm based in Warsaw"                  → home_airport="WAW", departure_airports=["WAW"]
   "I sometimes fly from Krakow too"      → departure_airports=["KRK"]
@@ -41,6 +42,7 @@ def _merge_list(existing: list, new: list) -> list:
 
 async def update_user_profile(
     user_id: str,
+    name: Optional[str] = None,
     carry_on_only: Optional[bool] = None,
     max_stops: Optional[int] = None,
     home_airport: Optional[str] = None,
@@ -59,6 +61,8 @@ async def update_user_profile(
         doc = doc_to_dict(raw) if raw is not None else {}
 
     updates: dict = {}
+    if name is not None:
+        updates["name"] = name
     if carry_on_only is not None:
         updates["carry_on_only"] = carry_on_only
     if max_stops is not None:

@@ -68,6 +68,7 @@ class ActiveConstraints(BaseModel):
 
 class UserProfile(BaseModel):
     user_id: str
+    name: Optional[str] = None
     carry_on_only: Optional[bool] = None
     max_stops: Optional[int] = None
     home_airport: Optional[str] = None

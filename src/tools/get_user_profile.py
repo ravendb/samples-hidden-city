@@ -16,6 +16,7 @@ from src.db.client import doc_to_dict, get_store
 log = logging.getLogger(__name__)
 
 DEFAULT_PREFERENCES = {
+    "name": None,
     "carry_on_only": False,
     "max_stops": 2,
     "home_airport": None,
@@ -31,6 +32,7 @@ DEFAULT_PREFERENCES = {
 
 def build_preferences(d: dict) -> dict:
     return {
+        "name": d.get("name"),
         "carry_on_only": d.get("carry_on_only", False),
         "max_stops": d.get("max_stops", 2),
         "home_airport": d.get("home_airport"),

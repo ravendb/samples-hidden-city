@@ -7,8 +7,8 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 
 _ENV_LOCAL = Path(__file__).parent.parent.parent / ".env.local"
 _LICENSE_FILE = Path(__file__).parent.parent.parent / "license.json"
@@ -23,6 +23,13 @@ from src.db.models import ConversationTurn
 from src.db.seed import seed_if_empty
 from src.tools.get_user_profile import DEFAULT_PREFERENCES, build_preferences
 from src.tools.get_user_profile import get_user_profile as _get_user_profile
+from src.tools.update_user_profile import update_user_profile as _update_user_profile
+from src.tools.user_attachments import (
+    ATTACHMENT_TYPES,
+    get_user_attachment,
+    list_user_attachments,
+    save_user_attachment,
+)
 
 log = logging.getLogger(__name__)
 app = FastAPI(title="Hidden City Flight Agent")
@@ -31,6 +38,7 @@ _CHAT_DIR = Path(__file__).parent.parent / "chat"
 _UI_PATH     = _CHAT_DIR / "index.html"
 _LANDING_PATH = _CHAT_DIR / "landing.html"
 _SETUP_PATH   = _CHAT_DIR / "setup.html"
+_PROFILE_PATH = _CHAT_DIR / "profile.html"
 
 
 @app.on_event("startup")
@@ -129,6 +137,13 @@ async def ui() -> HTMLResponse:
     return HTMLResponse(_UI_PATH.read_text(encoding="utf-8"))
 
 
+@app.get("/profile", response_class=HTMLResponse)
+async def profile_page() -> HTMLResponse:
+    if not _PROFILE_PATH.exists():
+        raise HTTPException(status_code=404, detail="Profile page not found")
+    return HTMLResponse(_PROFILE_PATH.read_text(encoding="utf-8"))
+
+
 class SetupRequest(BaseModel):
     openai_api_key: str | None = None
     ravendb_license: str | None = None
@@ -191,6 +206,65 @@ async def get_routes() -> list[dict]:
 async def get_profile(user_id: str = "demo") -> dict:
     """Return the user's saved profile/preferences for the chat UI profile panel."""
     return await _get_user_profile(user_id)
+
+
+class ProfileDetailsRequest(BaseModel):
+    user_id: str = "demo"
+    name: str | None = None
+    carry_on_only: bool | None = None
+    home_airport: str | None = None
+    budget_max: float | None = None
+    budget_currency: str | None = None
+
+
+@app.post("/api/profile/details")
+async def save_profile_details(body: ProfileDetailsRequest) -> dict:
+    """Save structured profile fields submitted from the Profile screen's form."""
+    return await _update_user_profile(
+        user_id=body.user_id,
+        name=body.name,
+        carry_on_only=body.carry_on_only,
+        home_airport=body.home_airport,
+        budget_max=body.budget_max,
+        budget_currency=body.budget_currency,
+    )
+
+
+@app.get("/api/profile/attachments")
+async def get_profile_attachments(user_id: str = "demo") -> list[dict]:
+    """List attachment metadata (name, content type, size) for the profile screen."""
+    return list_user_attachments(user_id)
+
+
+@app.post("/api/profile/attachment")
+async def upload_profile_attachment(
+    user_id: str = Form("demo"),
+    attachment_type: str = Form(...),
+    file: UploadFile = File(...),
+) -> dict:
+    """Upload a passport scan, bag photo, or preference sheet (PDF) as a RavenDB attachment."""
+    if attachment_type not in ATTACHMENT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"attachment_type must be one of {ATTACHMENT_TYPES}",
+        )
+    content = await file.read()
+    return save_user_attachment(
+        user_id=user_id,
+        attachment_type=attachment_type,
+        filename=file.filename or attachment_type,
+        content=content,
+        content_type=file.content_type or "application/octet-stream",
+    )
+
+
+@app.get("/api/profile/attachment/{attachment_type}")
+async def download_profile_attachment(attachment_type: str, user_id: str = "demo") -> Response:
+    """Stream back a previously uploaded attachment (e.g. to preview/download it)."""
+    result = get_user_attachment(user_id, attachment_type)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    return Response(content=result["content"], media_type=result["content_type"])
 
 
 @app.post("/chat", response_model=ChatResponse)

@@ -43,6 +43,20 @@
   .dot-hc { background: var(--hidden-city); }
   .dot-reg { background: var(--regular); }
 
+  .user-switcher { display: flex; align-items: center; gap: 6px; font-size: 0.72rem; color: var(--text-muted); }
+  .user-switcher label { text-transform: uppercase; letter-spacing: 0.03em; }
+  .user-switcher input {
+    width: 90px; background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 5px; padding: 4px 7px; color: var(--text); font-size: 0.75rem;
+    font-family: var(--font);
+  }
+  .user-switcher input:focus { outline: none; border-color: var(--accent); }
+  .user-switcher button {
+    background: var(--surface2); border: 1px solid var(--border); border-radius: 5px;
+    color: var(--text); font-size: 0.7rem; padding: 4px 9px; cursor: pointer;
+  }
+  .user-switcher button:hover { border-color: var(--accent); }
+
   /* Map */
   #map { flex: 0 0 42vh; position: relative; }
   #map-container { height: 100%; }
@@ -118,6 +132,11 @@
     display: flex; flex-direction: column; gap: 16px;
   }
   .profile-header { display: flex; align-items: center; gap: 10px; }
+  .profile-edit-link {
+    font-size: 0.72rem; color: var(--accent2); text-decoration: none;
+    margin-top: -8px;
+  }
+  .profile-edit-link:hover { text-decoration: underline; }
   .profile-icon { font-size: 1.3rem; line-height: 1; }
   .profile-title { font-size: 0.85rem; font-weight: 600; }
   .profile-subtitle { font-size: 0.68rem; color: var(--text-muted); }
@@ -191,6 +210,11 @@
         click airport to filter + prefill chat
       </div>
     </div>
+    <div class="user-switcher" style="border-left:1px solid var(--border);padding-left:16px">
+      <label for="user-id-input">profile</label>
+      <input type="text" id="user-id-input" placeholder="demo" autocomplete="off" spellcheck="false" />
+      <button id="switch-user-btn" title="Switch profile">Switch</button>
+    </div>
   </header>
 
   <div id="map"><div id="map-container"></div></div>
@@ -222,10 +246,12 @@
    <div class="profile-header">
      <span class="profile-icon">👤</span>
      <div>
-       <div class="profile-title">Your Profile</div>
+       <div class="profile-title" id="profile-title">Your Profile</div>
        <div class="profile-subtitle">learned from this conversation</div>
      </div>
    </div>
+
+   <a href="/profile" class="profile-edit-link">Edit profile, passport &amp; documents →</a>
 
    <div class="profile-section">
      <div class="profile-label">Baggage</div>
@@ -268,6 +294,33 @@
 const TOKEN_BUDGET = 1500;
 let selectedAirport = null;
 let map, arcLayer;
+
+// ---- Active profile (shared across /ui and /profile via localStorage) ----
+const ACTIVE_USER_KEY = 'hc_active_user';
+
+function getUserId() {
+  return localStorage.getItem(ACTIVE_USER_KEY) || 'demo';
+}
+
+function setUserId(id) {
+  localStorage.setItem(ACTIVE_USER_KEY, id || 'demo');
+}
+
+function initUserSwitcher() {
+  const input = document.getElementById('user-id-input');
+  const btn = document.getElementById('switch-user-btn');
+  input.value = getUserId();
+
+  const doSwitch = () => {
+    const next = input.value.trim() || 'demo';
+    if (next === getUserId()) return;
+    setUserId(next);
+    location.reload();
+  };
+  btn.addEventListener('click', doSwitch);
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') doSwitch(); });
+}
+initUserSwitcher();
 
 // ---- Map setup ----
 map = L.map('map-container', {
@@ -412,6 +465,8 @@ function renderChips(sectionId, items) {
 }
 
 function renderProfile(prefs) {
+  document.getElementById('profile-title').textContent = prefs.name ? `Hi, ${prefs.name}` : 'Your Profile';
+
   const baggageEl = document.getElementById('profile-baggage');
   if (prefs.carry_on_only) {
     baggageEl.textContent = 'Carry-on only ✓';
@@ -451,7 +506,7 @@ function renderProfile(prefs) {
 
 async function refreshProfile() {
   try {
-    const res = await fetch('/api/profile?user_id=demo');
+    const res = await fetch(`/api/profile?user_id=${encodeURIComponent(getUserId())}`);
     if (!res.ok) return;
     const data = await res.json();
     renderProfile(data.preferences || {});
@@ -511,7 +566,7 @@ async function sendMessage() {
     const res = await fetch('/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: 'demo', session_id: '1', message: text }),
+      body: JSON.stringify({ user_id: getUserId(), session_id: '1', message: text }),
     });
 
     if (!res.ok) {

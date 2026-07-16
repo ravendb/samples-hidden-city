@@ -15,6 +15,7 @@ import os
 from pyravendb.commands.commands_data import PutDocumentCommand
 
 from src.db.client import doc_to_dict, get_store
+from src.db.expiration import ensure_expiration_enabled, expires_at
 from src.db.models import RouteDocument
 from src.hidden_city.enricher import enrich_hidden_city
 from src.scraper.travelpayouts import fetch_cheapest_from
@@ -43,6 +44,9 @@ def get_origins(store) -> list[str]:
 async def run() -> None:
     token = os.environ["TRAVELPAYOUTS_TOKEN"]
     store = get_store()
+    # The CronJob runs as its own process, independent of the agent's startup event —
+    # don't assume the agent pod has already turned expiration on for this database.
+    ensure_expiration_enabled(store)
     origins = get_origins(store)
     total_written = 0
 
@@ -57,7 +61,7 @@ async def run() -> None:
         executor = store.get_request_executor()
         for route in enriched:
             data = route.model_dump(mode="json")
-            data["@metadata"] = {"@collection": "Routes"}
+            data["@metadata"] = {"@collection": "Routes", "@expires": expires_at()}
             executor.execute(PutDocumentCommand(key=route.route_id(), document=data))
 
         total_written += len(enriched)

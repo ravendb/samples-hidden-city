@@ -86,16 +86,20 @@ TOOL_DEFINITIONS = [
             "name": "update_user_profile",
             "description": (
                 "Save durable user preferences to RavenDB. Call when the user expresses "
-                "a preference that should carry across sessions: baggage style, home/departure "
-                "airports, countries or destinations they're interested in, budget, preferred "
-                "airlines, loyalty programs. List fields are merged with what's already saved — "
-                "pass only the new values just learned, not the full list. "
+                "a preference that should carry across sessions: their name, baggage style, "
+                "home/departure airports, countries or destinations they're interested in, "
+                "budget, preferred airlines, loyalty programs. List fields are merged with "
+                "what's already saved — pass only the new values just learned, not the full list. "
                 "Do NOT use for trip-specific constraints — use save_conversation for those."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "user_id": {"type": "string"},
+                    "name": {
+                        "type": "string",
+                        "description": "What the user wants to be called (e.g. 'Alex').",
+                    },
                     "carry_on_only": {
                         "type": "boolean",
                         "description": "User always travels without checked baggage.",

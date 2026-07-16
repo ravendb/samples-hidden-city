@@ -18,6 +18,7 @@ import httpx
 from pyravendb.commands.commands_data import PutDocumentCommand
 
 from src.db.client import doc_to_dict, get_store, load_airport_names
+from src.db.expiration import expires_at
 from src.db.models import RouteDocument, TypicalPrice
 
 log = logging.getLogger(__name__)
@@ -110,7 +111,7 @@ def _write_to_ravendb(
     try:
         store = get_store()
         data = route.model_dump(mode="json")
-        data["@metadata"] = {"@collection": "Routes"}
+        data["@metadata"] = {"@collection": "Routes", "@expires": expires_at()}
         store.get_request_executor().execute(
             PutDocumentCommand(key=route.route_id(), document=data)
         )

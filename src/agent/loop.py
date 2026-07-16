@@ -61,6 +61,8 @@ def _format_preferences(preferences: dict | None) -> str:
         return "No saved preferences yet — this looks like a new user."
 
     lines = []
+    if preferences.get("name"):
+        lines.append(f"- name: {preferences['name']}")
     if preferences.get("carry_on_only"):
         lines.append("- carry_on_only: true")
     if preferences.get("home_airport"):

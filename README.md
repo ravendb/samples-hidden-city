@@ -80,7 +80,21 @@ Price drops → RavenDB Subscription ──push──▶ Worker → alert
 | **Optimistic concurrency** | `src/tools/save_conversation.py` | Multiple agent replicas can update the same session doc safely |
 | **Data Subscriptions** | `src/worker/run.py` | Push-only price-drop alerts — no polling, no message broker needed |
 | **Kubernetes Operator** | `k8s/operator/` | 3-node cluster declared as a CRD; scaling, failover, TLS handled automatically |
-| **TTL index** (roadmap) | — | Stale route documents expire automatically without a housekeeping job |
+| **Document Expiration** | `src/db/expiration.py` | Price fields auto-expire after 20 min via `@expires` metadata — no manual TTL management |
+
+**How Document Expiration works here:**
+- `ensure_expiration_enabled()` turns the feature on for the database once, at
+  startup (agent boot and scraper CronJob both call it — it's idempotent, so
+  whichever process starts first wins).
+- Every route document written by the bulk scraper (`src/scraper/run.py`) and
+  by the live-price cache-miss path (`src/tools/get_live_price.py`) gets an
+  `@expires` timestamp 20 minutes in the future, computed by `expires_at()`.
+- RavenDB's background expiration process sweeps for expired documents every
+  60 seconds and deletes them server-side — no CronJob, no `DELETE WHERE`
+  query, no housekeeping code in this repo.
+- Net effect: stale prices disappear on their own. A cache read past its TTL
+  is a miss, not stale data — the agent falls through to `get_live_price` and
+  the document is rewritten with a fresh 20-minute clock.
 
 ---
 

@@ -179,10 +179,11 @@ separate vector DB needed.
 
 ### Attachments
 
-Binary blobs stored on the user document: passport scan (PDF/image, for
-name/nationality display), profile photo, carry-on bag dimensions file, exported
-preference sheets. Stored as RavenDB attachments — not queryable, not indexed,
-retrieved whole via `get_user_profile` tool.
+Binary blobs stored on the user document: passport scan, bag photo, and an
+exported preference sheet (PDF — e.g. a bucket list). Stored as RavenDB
+attachments (`src/tools/user_attachments.py`) — not queryable, not indexed,
+uploaded/retrieved whole via the Profile screen (`/profile`) and its
+`/api/profile/attachment*` endpoints, not via the `get_user_profile` LLM tool.
 
 ## RavenDB as Agent Tool
 
