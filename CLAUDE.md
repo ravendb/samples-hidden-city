@@ -46,7 +46,7 @@ and when. Nothing is blindly injected. Only the user's prompt leaves the cluster
 | Scenario     | What happens                                                         | Egress |
 |--------------|----------------------------------------------------------------------|--------|
 | Cache hit    | Route + price already in RavenDB, agent retrieves locally            | Zero   |
-| Cache miss   | Agent triggers Travelpayouts live call, result written to RavenDB, served | One    |
+| Cache miss   | Agent triggers Travelpayouts live call, result written to RavenDB,   | One    |
 | Price watch  | RavenDB Subscription pushes price change to agent — no polling       | Zero   |
 
 ## Stack

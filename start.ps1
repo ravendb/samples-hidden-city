@@ -101,7 +101,7 @@ if (-not (Test-Path "$root\.env")) {
 }
 
 if (Test-Path "$root\license.json") {
-    $env:RAVEN_LICENSE = Get-Content "$root\license.json" -Raw
+    $env:RAVENDB_LICENSE = Get-Content "$root\license.json" -Raw
     Write-Ok "License loaded from license.json"
 } else {
     Write-Warn "license.json not found -- RavenDB will run in Developer mode (3 GB limit, 1 node)."

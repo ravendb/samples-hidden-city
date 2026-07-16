@@ -232,6 +232,11 @@ uv pip list                       # list installed packages
 
 ## How to Run It
 
+> **Before you start:** the agent needs an **OpenAI API key** (`OPENAI_API_KEY`) to run
+> at all, and a free **RavenDB license** (`RAVENDB_LICENSE`) for RavenDB. The setup
+> wizard at `/setup` walks you through both — see
+> [Environment variables](#environment-variables) below if you'd rather set them manually.
+
 ### Local (docker-compose)
 
 The fastest way is the included start script — it handles `.env`, RavenDB health

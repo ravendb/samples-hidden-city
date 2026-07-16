@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hidden City Flight Agent — RavenDB in-cluster demo</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #0f1117;
+  --surface: #1a1d27;
+  --surface2: #252836;
+  --border: #2e3347;
+  --primary: #3b82f6;
+  --primary-dim: rgba(59,130,246,0.15);
+  --primary-border: rgba(59,130,246,0.35);
+  --text: #e2e8f0;
+  --text-muted: #64748b;
+  --radius: 10px;
+  --font: 'Inter', system-ui, sans-serif;
+}
+html, body { background: var(--bg); color: var(--text); font-family: var(--font); }
+
+/* ── wrapper ── */
+.wrapper { min-height: 100vh; }
+.page { max-width: 860px; margin: 0 auto; padding: 4rem 2rem 5rem; }
+
+/* ── Hero ── */
+.hero { text-align: center; margin-bottom: 4.5rem; }
+
+.title {
+  margin: 0 0 1.25rem;
+  font-size: 3.8rem; font-weight: 800; line-height: 1.1;
+  background: linear-gradient(90deg, #3b82f6, #a78bfa, #60a5fa, #3b82f6);
+  background-size: 250% 100%;
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: gradientMove 3s linear infinite;
+}
+@keyframes gradientMove {
+  0%   { background-position: 0% 0%; }
+  100% { background-position: 250% 0%; }
+}
+
+.tagline {
+  margin: 0 auto 2rem;
+  font-size: 1.1rem; color: var(--text-muted); line-height: 1.7;
+  max-width: 520px;
+}
+
+/* pulsing CTA */
+.cta {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  padding: 0.8rem 2rem;
+  border-radius: 999px;
+  background: var(--primary);
+  color: #fff;
+  text-decoration: none;
+  font-size: 1rem; font-weight: 600;
+  box-shadow: 0 0 0 0 rgba(59,130,246,0.7);
+  animation: ctaPulse 2s ease-out infinite;
+  transition: opacity 0.15s;
+}
+.cta:hover { opacity: 0.88; animation: none; }
+@keyframes ctaPulse {
+  0%   { box-shadow: 0 0 0 0 rgba(59,130,246,0.7); }
+  70%  { box-shadow: 0 0 0 14px rgba(59,130,246,0); }
+  100% { box-shadow: 0 0 0 0 rgba(59,130,246,0); }
+}
+
+/* ── Flow steps ── */
+.flow {
+  display: flex; align-items: center; justify-content: center;
+  gap: 0; margin-bottom: 4rem; flex-wrap: wrap;
+}
+.flow-step {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 0.9rem 1.4rem;
+  font-size: 0.82rem; color: var(--text-muted);
+  min-width: 130px; text-align: center;
+}
+.flow-step .step-icon { font-size: 1.4rem; }
+.flow-step .step-label { font-weight: 600; color: var(--text); font-size: 0.85rem; }
+.flow-arrow {
+  font-size: 1.2rem; color: var(--text-muted);
+  padding: 0 0.5rem; flex-shrink: 0;
+}
+
+/* ── Pillars ── */
+.pillars {
+  display: grid; grid-template-columns: repeat(3,1fr);
+  gap: 1rem; margin-bottom: 4rem;
+}
+.pillar {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 1.5rem;
+  display: flex; flex-direction: column; gap: 0.6rem;
+}
+.pillar-icon { font-size: 1.5rem; line-height: 1; }
+.pillar-title { margin: 0; font-size: 1rem; font-weight: 700; }
+.pillar-body { margin: 0; font-size: 0.87rem; color: var(--text-muted); line-height: 1.6; }
+
+/* ── Section ── */
+.section { margin-bottom: 3.5rem; }
+.section-title {
+  margin: 0 0 1.25rem;
+  font-size: 1.25rem; font-weight: 700;
+  border-bottom: 1px solid var(--border); padding-bottom: 0.6rem;
+}
+
+/* ── Features ── */
+.feature-list { list-style: none; display: flex; flex-direction: column; gap: 0.6rem; }
+.feature-item {
+  display: flex; align-items: baseline; gap: 0.75rem;
+  font-size: 0.9rem; color: var(--text-muted); line-height: 1.5;
+}
+.feature-name {
+  color: var(--text); font-weight: 600; white-space: nowrap;
+  text-decoration: none;
+}
+.feature-name:hover { color: var(--primary); text-decoration: underline; }
+.feature-dash { color: var(--border); flex-shrink: 0; }
+
+/* ── Cost table ── */
+.cost-table {
+  width: 100%; border-collapse: collapse; font-size: 0.88rem;
+}
+.cost-table th, .cost-table td {
+  border: 1px solid var(--border); padding: 8px 12px; text-align: left;
+}
+.cost-table th { background: var(--surface2); font-weight: 600; }
+.cost-table td:first-child { font-weight: 500; }
+.highlight { color: #4ade80; font-weight: 700; }
+.dim { color: var(--text-muted); }
+
+/* ── Links ── */
+.links { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+.link {
+  display: inline-flex; align-items: center; gap: 0.35rem;
+  padding: 0.45rem 1rem; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface);
+  color: var(--text-muted); text-decoration: none;
+  font-size: 0.85rem; transition: border-color 0.15s, color 0.15s;
+}
+.link:hover { border-color: var(--primary); color: var(--text); }
+
+/* ── Responsive ── */
+@media (max-width: 640px) {
+  .title { font-size: 2.6rem; }
+  .pillars { grid-template-columns: 1fr; }
+  .flow { flex-direction: column; }
+  .flow-arrow { transform: rotate(90deg); }
+}
+</style>
+</head>
+<body>
+<div class="wrapper"><div class="page">
+
+  <!-- Hero -->
+  <section class="hero">
+    <h1 class="title">Hidden City Flight Agent</h1>
+    <p class="tagline">
+      AI agent that finds hidden-city flight opportunities — running entirely
+      inside the cluster. RavenDB replaces the external context store, cutting
+      egress to zero and token costs by 97%.
+    </p>
+    <a href="/setup" class="cta">Get Started →</a>
+  </section>
+
+  <!-- Flow diagram -->
+  <div class="flow">
+    <div class="flow-step">
+      <span class="step-icon">🏠</span>
+      <span class="step-label">Landing</span>
+      <span>you are here</span>
+    </div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">
+      <span class="step-icon">🔑</span>
+      <span class="step-label">Setup</span>
+      <span>API keys &amp; license</span>
+    </div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">
+      <span class="step-icon">✈️</span>
+      <span class="step-label">Chat</span>
+      <span>search flights</span>
+    </div>
+  </div>
+
+  <!-- Pillars -->
+  <div class="pillars">
+    <div class="pillar">
+      <span class="pillar-icon">🧠</span>
+      <h2 class="pillar-title">Zero-egress context</h2>
+      <p class="pillar-body">
+        RavenDB lives inside the same Kubernetes cluster as the agent. Route data,
+        price history, and conversation memory never leave the cluster.
+      </p>
+    </div>
+    <div class="pillar">
+      <span class="pillar-icon">⚡</span>
+      <h2 class="pillar-title">~1 500 tokens/turn</h2>
+      <p class="pillar-body">
+        The naive baseline stuffs a raw Travelpayouts response (40k–100k tokens) into
+        every prompt. The agent retrieves only what it needs via tools — 97% fewer
+        tokens billed.
+      </p>
+    </div>
+    <div class="pillar">
+      <span class="pillar-icon">🛩️</span>
+      <h2 class="pillar-title">Hidden city detection</h2>
+      <p class="pillar-body">
+        Compares A→B→C vs A→B direct. When the connecting route is cheaper and
+        your real destination is the hub, the agent flags it — for information
+        only, never auto-booked.
+      </p>
+    </div>
+  </div>
+
+  <!-- Cost comparison -->
+  <section class="section">
+    <h2 class="section-title">What you save</h2>
+    <table class="cost-table">
+      <thead>
+        <tr>
+          <th>Metric</th>
+          <th>Naive baseline</th>
+          <th>With RavenDB in-cluster</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Tokens per API call</td>
+          <td class="dim">40 000 – 100 000</td>
+          <td class="highlight">~1 500</td>
+        </tr>
+        <tr>
+          <td>Retrieval egress</td>
+          <td class="dim">Full payload leaves cluster</td>
+          <td class="highlight">Zero (local query)</td>
+        </tr>
+        <tr>
+          <td>Context store</td>
+          <td class="dim">External API + Redis + vector DB</td>
+          <td class="highlight">RavenDB only (one product)</td>
+        </tr>
+        <tr>
+          <td>Conversation memory</td>
+          <td class="dim">Lost on pod restart</td>
+          <td class="highlight">Survives pod restart</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- RavenDB features used -->
+  <section class="section">
+    <h2 class="section-title">RavenDB features used</h2>
+    <ul class="feature-list">
+      <li class="feature-item">
+        <a class="feature-name" href="https://ravendb.net/docs/article-page/7.0/csharp/document-extensions/timeseries/overview" target="_blank" rel="noreferrer">Documents</a>
+        <span class="feature-dash">—</span>
+        <span>Route data, conversation sessions, airport metadata — all in one cluster</span>
+      </li>
+      <li class="feature-item">
+        <a class="feature-name" href="https://ravendb.net/docs/article-page/7.0/csharp/indexes/querying/full-text-search" target="_blank" rel="noreferrer">Vector Search</a>
+        <span class="feature-dash">—</span>
+        <span>Semantic route similarity ("something like LHR but cheaper") — no separate vector DB</span>
+      </li>
+      <li class="feature-item">
+        <a class="feature-name" href="https://ravendb.net/docs/article-page/7.0/csharp/client-api/data-subscriptions/what-are-data-subscriptions" target="_blank" rel="noreferrer">Subscriptions</a>
+        <span class="feature-dash">—</span>
+        <span>Price-drop push alerts to the agent worker — zero polling loops</span>
+      </li>
+      <li class="feature-item">
+        <a class="feature-name" href="https://ravendb.net/docs/article-page/7.0/csharp/document-extensions/attachments/what-are-attachments" target="_blank" rel="noreferrer">Attachments</a>
+        <span class="feature-dash">—</span>
+        <span>Passport scans, bag photos, preference sheets stored on user documents</span>
+      </li>
+      <li class="feature-item">
+        <a class="feature-name" href="https://ravendb.net/docs/article-page/7.0/csharp/document-extensions/expiration" target="_blank" rel="noreferrer">Document Expiration</a>
+        <span class="feature-dash">—</span>
+        <span>Price fields auto-expire after 20 min via @expires metadata — no manual TTL management</span>
+      </li>
+      <li class="feature-item">
+        <a class="feature-name" href="https://ravendb.net/docs/article-page/7.0/csharp/server/cluster/overview" target="_blank" rel="noreferrer">Kubernetes Operator</a>
+        <span class="feature-dash">—</span>
+        <span>RavenDBCluster CRD handles bootstrapping, TLS, rolling upgrades with Raft quorum gates</span>
+      </li>
+    </ul>
+  </section>
+
+  <!-- Links -->
+  <section class="section">
+    <h2 class="section-title">Community &amp; links</h2>
+    <div class="links">
+      <a href="https://discord.gg/ravendb" target="_blank" rel="noreferrer" class="link">💬 Discord</a>
+      <a href="https://github.com/ravendb/samples-hidden-city/issues" target="_blank" rel="noreferrer" class="link">🐛 Report an issue</a>
+      <a href="https://ravendb.net/download" target="_blank" rel="noreferrer" class="link">📥 Free RavenDB license</a>
+      <a href="https://docs.anthropic.com" target="_blank" rel="noreferrer" class="link">🤖 Anthropic docs</a>
+    </div>
+  </section>
+
+</div></div>
+</body>
+</html>
