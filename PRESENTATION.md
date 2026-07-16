@@ -1,6 +1,6 @@
 Skrypt prezentacji — RavenDB jako pamięć robocza agenta AI
 OTWARCIE (hook, ~1 min)
-Zanim zaczniemy — kto z was uruchomił już agenta AI i wpuścił go do produkcji? A kto potem dostał rachunek za Anthropic API i trochę się zdziwił?
+Zanim zaczniemy — kto z was uruchomił już agenta AI i wpuścił go do produkcji? A kto potem dostał rachunek za OpenAI API i trochę się zdziwił?
 
 To, co wam pokażę, to nie jest demo "AI robi fajne rzeczy". To demo o pieniądzach. O dwóch pozycjach budżetowych, których nikt nie kalkuluje na początku: koszcie tokenów i koszcie egresu. Obie rosną liniowo z ruchem. I obie można prawie wyeliminować — bez zmiany modelu, bez zmiany inference providera.
 
@@ -12,9 +12,9 @@ Hidden city to trик cenowy — lot WAW→JFK przez LHR kosztuje 1650 PLN, a be
 Ale wróćmy do infrastruktury. Żeby agent mógł odpowiedzieć na takie pytanie, musi mieć kontekst: ceny tras, historię rozmowy, preferencje użytkownika. Skąd to dostaje?
 
 ETAP 1 — Naiwne podejście (~3 min)
-Najprościej: wywołujesz API Travelpayouts, dostajesz odpowiedź — 250 KB JSONa z ofertami, segmentami, fareami, regułami taryf. Wrzucasz to wszystko do prompta LLM i pytasz "co o tym myślisz?"
+Najprościej: wywołujesz Travelpayouts API, dostajesz odpowiedź — setki rekordów cen, tras, przewoźników w surowym JSONie. Wrzucasz to wszystko do prompta LLM i pytasz "co o tym myślisz?"
 
-Wynik: 40 000–100 000 tokenów na jedno zapytanie. Przy cenie $3 za milion tokenów input, to $0.12 za request. Przy 1000 zapytań dziennie — $126/dzień. Przy 10 000 — $1260/dzień.
+Wynik: 40 000–100 000 tokenów na jedno zapytanie. Przy cenie $0.15 za milion tokenów input (gpt-4o-mini), to $0.006 za request. Przy 1000 zapytań dziennie — $6/dzień. Przy 10 000 — $60/dzień.
 
 I jeszcze jeden problem: agent jest bezstanowy. Następne pytanie użytkownika — "a co ze mną carry-on only?" — i agent nie pamięta poprzedniej rozmowy. Musisz ponownie wysłać wszystko od nowa.
 
@@ -23,14 +23,14 @@ Okej, konteneryzujemy. Dodajemy Redis jako cache, Postgres do historii rozmów, 
 
 Idziemy dalej. Kubernetes, Elasticsearch do wyszukiwania, pgvector do semantic search, Kafka do event-driven price watch. Teraz mamy pięć osobnych systemów do utrzymania: pięć dashboardów, pięć strategii backup, trzy języki zapytań. Infra miesięcznie: $1190. LLM koszt: $60/dzień. Lepiej, ale stack jest ogromny.
 
-I kluczowa obserwacja: egres wciąż opuszcza klaster na każdym retrievalu. Dane wychodzą z klastra, wchodzą do agenta, wychodzą do Anthropic. Płacisz za każdy byte.
+I kluczowa obserwacja: egres wciąż opuszcza klaster na każdym retrievalu. Dane wychodzą z klastra, wchodzą do agenta, wychodzą do OpenAI. Płacisz za każdy byte.
 
 ETAP 4 — RavenDB in-cluster (~5 min)
 A teraz to samo, ale inaczej.
 
 (pokaż diagram architektury)
 
-Agent działa w Kubernetes. RavenDB działa w tym samym klastrze — jako operator, trzy nody, HA out of the box. Dane przylatują z Travelpayouts co 6 godzin przez CronJob. Live ceny z Travelpayouts — tylko na cache miss, co zdarza się w ~5% przypadków.
+Agent działa w Kubernetes. RavenDB działa w tym samym klastrze — jako operator, trzy nody, HA out of the box. Dane przylatują z Travelpayouts co 6 godzin przez CronJob. Na cache miss agent odpytuje Travelpayouts live API — zdarza się to w ~5% przypadków.
 
 Użytkownik pyta o loty. Agent nie wkłada danych do prompta. Zamiast tego model wywołuje narzędzie — search_routes(). RavenDB odpowiada lokalnie: pre-strukturyzowany dokument z origin, destination, ceną, hidden city score. Około 400 tokenów. Tool result wraca do tego samego API call.
 
@@ -38,7 +38,7 @@ Na zewnątrz klastra wychodzi tylko prompt użytkownika. 100 tokenów. Zero retr
 
 (pokaż measure_tokens.py output)
 
-1500 tokenów na request zamiast 40 000. Koszt LLM: $10.50/dzień zamiast $126. To jest 92% redukcja — bez zmiany modelu.
+1500 tokenów na request zamiast 40 000. Koszt LLM: $0.47/dzień zamiast $6. To jest 92% redukcja — bez zmiany modelu.
 
 LIVE DEMO — trzy momenty (~5 min)
 1. Zero egress
@@ -76,11 +76,11 @@ spec:
 kubectl apply i gotowe. Operator bootstrapuje klaster, generuje certyfikaty TLS, zarządza Raft quorum podczas rolling upgrades — nigdy nie schodzi poniżej (n/2)+1 żywych nodów. Admission webhooks blokują nieprawidłowe konfiguracje zanim cokolwiek się stanie.
 
 ZAMKNIĘCIE (~1 min)
-Inference zostawiliśmy na zewnątrz — Anthropic API — żeby pokazać, że oszczędności są wyłącznie z kontekstu. Nie z tego, gdzie liczy model. Z tego, co przestajemy wysyłać.
+Inference zostawiliśmy na zewnątrz — OpenAI API — żeby pokazać, że oszczędności są wyłącznie z kontekstu. Nie z tego, gdzie liczy model. Z tego, co przestajemy wysyłać.
 
 Jeśli macie GPU w klastrze, llm-d albo vLLM jako drop-in replacement eliminuje ostatni egres. Interface narzędzi agenta się nie zmienia.
 
-Summary: 40 000 tokenów → 1 500. $126/dzień → $10.50. Pięć systemów → jeden. Jeden kubectl apply.
+Summary: 40 000 tokenów → 1 500. $6/dzień → $0.47. Pięć systemów → jeden. Jeden kubectl apply.
 
 PYTANIA — przydatne odpowiedzi z góry
 "Dlaczego nie po prostu Redis?"

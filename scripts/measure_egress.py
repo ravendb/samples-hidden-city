@@ -1,11 +1,11 @@
 """
 Measures outbound bytes per agent request and compares against the naive baseline.
 
-Naive baseline: if you sent the raw Travelpayouts flight-offers response directly to
-the LLM API on every request, ~250 KB leaves the cluster per call.
+Naive baseline: if you sent the raw Travelpayouts bulk flight data response directly
+to the LLM API on every request, ~250 KB leaves the cluster per call.
 
 Optimised: only the user prompt leaves the cluster (~0.1 KB). RavenDB context
-is resolved locally by tool calls; the Anthropic API receives only the message.
+is resolved locally by tool calls; the OpenAI API receives only the message.
 
 Estimation method: token counts returned by the agent × 4 bytes/token.
 This is an approximation — actual compressed HTTP payloads will be smaller.
@@ -27,7 +27,7 @@ log = logging.getLogger(__name__)
 
 AGENT_URL = "http://localhost:8000"
 
-# Travelpayouts /v1/prices/cheap for a typical route returns ~200-300 KB.
+# Travelpayouts bulk response for a route search returns ~200-300 KB of flight data.
 # We use 250 KB (250,000 bytes) as the naive baseline.
 NAIVE_EGRESS_BYTES = 250_000
 BYTES_PER_TOKEN = 4  # rough approximation
@@ -72,7 +72,7 @@ async def run() -> None:
             response.raise_for_status()
             data = response.json()
 
-            # Bytes sent to Anthropic = only the input tokens (user prompt + system)
+            # Bytes sent to OpenAI = only the input tokens (user prompt + system)
             # Context stays local in RavenDB — zero egress on retrieval
             optimised_bytes = data["input_tokens"] * BYTES_PER_TOKEN
             reduction_pct = (1 - optimised_bytes / NAIVE_EGRESS_BYTES) * 100
@@ -93,8 +93,8 @@ async def run() -> None:
         print("-" * 80)
         print(f"{'Average':<40} {avg_opt:>12,} {avg_naive:>12,} {avg_reduction:>9.0f}%")
 
-        print(f"\nNaive baseline:  {NAIVE_EGRESS_BYTES / 1024:.0f} KB/request (raw Travelpayouts response)")
-        print(f"Optimised avg:   {avg_opt / 1024:.1f} KB/request (prompt only to Anthropic)")
+        print(f"\nNaive baseline:  {NAIVE_EGRESS_BYTES / 1024:.0f} KB/request (raw Travelpayouts bulk response)")
+        print(f"Optimised avg:   {avg_opt / 1024:.1f} KB/request (prompt only to OpenAI)")
         print(f"Retrieval egress: 0 KB (RavenDB is in-cluster — local tool calls)")
 
 
