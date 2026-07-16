@@ -24,6 +24,26 @@ def reset_store() -> None:
         _store = None
 
 
+def load_airport_names(store: DocumentStore, codes: list[str]) -> dict[str, dict]:
+    """
+    Look up city/country for IATA codes from the Airports collection.
+    Codes with no matching document are simply absent from the result —
+    callers must never fall back to guessing a name for them.
+    """
+    unique = {c.upper() for c in codes if c}
+    if not unique:
+        return {}
+
+    result: dict[str, dict] = {}
+    with store.open_session() as session:
+        for code in unique:
+            doc = session.load(f"airports/{code}")
+            if doc is not None:
+                d = doc_to_dict(doc)
+                result[code] = {"city": d.get("city"), "country": d.get("country")}
+    return result
+
+
 def doc_to_dict(obj) -> dict:
     """Recursively convert a pyravendb _DynamicStructure (or plain dict) to a plain dict."""
     if isinstance(obj, dict):

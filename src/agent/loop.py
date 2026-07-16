@@ -50,18 +50,66 @@ def _truncate_tool_result(result_json: str, max_tokens: int = WARN_TOOL_TOKENS) 
     return result_json[:max_chars] + ' "…truncated"}'
 
 
+def _format_preferences(preferences: dict | None) -> str:
+    """Render preloaded profile preferences for the system prompt.
+
+    Only non-empty/non-default fields are included to keep this small — the
+    preferences dict itself was already fetched locally from RavenDB (see
+    app.py's _load_conversation_context), never from an external call.
+    """
+    if not preferences:
+        return "No saved preferences yet — this looks like a new user."
+
+    lines = []
+    if preferences.get("carry_on_only"):
+        lines.append("- carry_on_only: true")
+    if preferences.get("home_airport"):
+        lines.append(f"- home_airport: {preferences['home_airport']}")
+    if preferences.get("departure_airports"):
+        lines.append(f"- departure_airports: {', '.join(preferences['departure_airports'])}")
+    if preferences.get("countries_of_interest"):
+        lines.append(f"- countries_of_interest: {', '.join(preferences['countries_of_interest'])}")
+    if preferences.get("destinations"):
+        lines.append(f"- destinations: {', '.join(preferences['destinations'])}")
+    if preferences.get("budget_max"):
+        currency = preferences.get("budget_currency") or ""
+        lines.append(f"- budget_max: {preferences['budget_max']} {currency}".strip())
+    if preferences.get("max_stops") is not None:
+        lines.append(f"- max_stops: {preferences['max_stops']}")
+    if preferences.get("preferred_airlines"):
+        lines.append(f"- preferred_airlines: {', '.join(preferences['preferred_airlines'])}")
+    if preferences.get("loyalty_programs"):
+        lines.append(f"- loyalty_programs: {', '.join(preferences['loyalty_programs'])}")
+
+    if not lines:
+        return "No saved preferences yet — this looks like a new user."
+    return "Known preferences for this user (already loaded from RavenDB):\n" + "\n".join(lines)
+
+
+def _build_system_content(user_id: str, session_id: str, preferences: dict | None) -> str:
+    return (
+        f"{SYSTEM_PROMPT}\n\n"
+        f"Current user_id: {user_id}. Session: {session_id}.\n\n"
+        f"{_format_preferences(preferences)}"
+    )
+
+
 async def run_agent(
     user_message: str,
     prior_turns: list[dict],
     user_id: str = "anonymous",
     session_id: str = "1",
+    preferences: dict | None = None,
 ) -> AgentResult:
     """
     prior_turns: list of {"role": ..., "content": ...} built from the session document.
-    Callers (app.py) are responsible for loading the session from RavenDB first.
+    preferences: profile dict built from the Users document (see app.py's
+    _load_conversation_context) — preloaded so search behavior does not depend on
+    the model choosing to call get_user_profile.
+    Callers (app.py) are responsible for loading both from RavenDB first.
     """
     client = AsyncOpenAI()
-    system_content = f"{SYSTEM_PROMPT}\n\nCurrent user_id: {user_id}. Session: {session_id}."
+    system_content = _build_system_content(user_id, session_id, preferences)
     messages = (
         [{"role": "system", "content": system_content}]
         + prior_turns
@@ -152,10 +200,11 @@ async def stream_agent(
     prior_turns: list[dict],
     user_id: str = "anonymous",
     session_id: str = "1",
+    preferences: dict | None = None,
 ) -> AsyncGenerator[str, None]:
     """Streaming variant -- yields SSE-formatted strings for /chat/stream."""
     client = AsyncOpenAI()
-    system_content = f"{SYSTEM_PROMPT}\n\nCurrent user_id: {user_id}. Session: {session_id}."
+    system_content = _build_system_content(user_id, session_id, preferences)
     messages = (
         [{"role": "system", "content": system_content}]
         + prior_turns

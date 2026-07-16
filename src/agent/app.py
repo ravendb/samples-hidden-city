@@ -21,6 +21,8 @@ from src.agent.loop import AgentResult, run_agent, stream_agent
 from src.db.client import doc_to_dict, get_store
 from src.db.models import ConversationTurn
 from src.db.seed import seed_if_empty
+from src.tools.get_user_profile import DEFAULT_PREFERENCES, build_preferences
+from src.tools.get_user_profile import get_user_profile as _get_user_profile
 
 log = logging.getLogger(__name__)
 app = FastAPI(title="Hidden City Flight Agent")
@@ -77,19 +79,33 @@ class ChatResponse(BaseModel):
     tool_calls: int
 
 
-def _load_prior_turns(user_id: str, session_id: str) -> list[dict]:
-    """Load last 10 turns from RavenDB session document as OpenAI messages."""
-    doc_id = f"sessions/{user_id}-{session_id}"
+def _load_conversation_context(user_id: str, session_id: str) -> tuple[list[dict], dict]:
+    """Load prior turns and the user profile in a single RavenDB round trip.
+
+    RavenDB feature used: batched multi-document Load. `session.load([id1, id2])`
+    issues one GetDocumentCommand for every id passed, regardless of collection —
+    so the session document (Sessions) and the profile document (Users) come back
+    in a single request instead of two. This is what lets every turn deterministically
+    preload the user's preferences into the system prompt (see loop.py) without
+    depending on the model choosing to call get_user_profile as a tool.
+    """
+    session_doc_id = f"sessions/{user_id}-{session_id}"
+    user_doc_id = f"users/{user_id}"
+
     store = get_store()
     with store.open_session() as session:
-        raw = session.load(doc_id)
+        session_raw, user_raw = session.load([session_doc_id, user_doc_id])
 
-    if raw is None:
-        return []
+    prior_turns: list[dict] = []
+    if session_raw is not None:
+        turns = doc_to_dict(session_raw).get("turns", [])[-10:]
+        prior_turns = [{"role": t["role"], "content": t["content"]} for t in turns]
 
-    raw_dict = doc_to_dict(raw)
-    turns = raw_dict.get("turns", [])[-10:]
-    return [{"role": t["role"], "content": t["content"]} for t in turns]
+    preferences = dict(DEFAULT_PREFERENCES)
+    if user_raw is not None:
+        preferences = build_preferences(doc_to_dict(user_raw))
+
+    return prior_turns, preferences
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -171,15 +187,22 @@ async def get_routes() -> list[dict]:
     return result
 
 
+@app.get("/api/profile")
+async def get_profile(user_id: str = "demo") -> dict:
+    """Return the user's saved profile/preferences for the chat UI profile panel."""
+    return await _get_user_profile(user_id)
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest) -> ChatResponse:
-    prior_turns = _load_prior_turns(request.user_id, request.session_id)
+    prior_turns, preferences = _load_conversation_context(request.user_id, request.session_id)
 
     result: AgentResult = await run_agent(
         user_message=request.message,
         prior_turns=prior_turns,
         user_id=request.user_id,
         session_id=request.session_id,
+        preferences=preferences,
     )
 
     if result.tool_token_warnings:
@@ -198,7 +221,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
 @app.post("/chat/stream")
 async def chat_stream(request: ChatRequest) -> StreamingResponse:
     import json
-    prior_turns = _load_prior_turns(request.user_id, request.session_id)
+    prior_turns, preferences = _load_conversation_context(request.user_id, request.session_id)
 
     async def generate():
         try:
@@ -207,6 +230,7 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                 prior_turns=prior_turns,
                 user_id=request.user_id,
                 session_id=request.session_id,
+                preferences=preferences,
             ):
                 yield chunk
         except Exception as exc:

@@ -24,7 +24,8 @@
     --font: 'Inter', system-ui, sans-serif;
   }
   html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); }
-  #app { display: flex; flex-direction: column; height: 100vh; }
+  #app { display: flex; flex-direction: row; height: 100vh; }
+  #main-col { display: flex; flex-direction: column; flex: 1; min-width: 0; height: 100%; }
 
   /* Header */
   header {
@@ -109,6 +110,46 @@
   }
   #send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
+  /* Profile panel */
+  #profile-panel {
+    width: 280px; flex: 0 0 280px;
+    background: var(--surface); border-left: 1px solid var(--border);
+    padding: 16px; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 16px;
+  }
+  .profile-header { display: flex; align-items: center; gap: 10px; }
+  .profile-icon { font-size: 1.3rem; line-height: 1; }
+  .profile-title { font-size: 0.85rem; font-weight: 600; }
+  .profile-subtitle { font-size: 0.68rem; color: var(--text-muted); }
+  .profile-section { display: flex; flex-direction: column; gap: 6px; }
+  .profile-label {
+    font-size: 0.68rem; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.04em; color: var(--text-muted);
+  }
+  .profile-value { font-size: 0.82rem; }
+  .profile-value.set { color: var(--text); }
+  .profile-value.unset { color: var(--text-muted); font-style: italic; }
+  .chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 999px; padding: 3px 10px; font-size: 0.72rem;
+    transition: background 0.3s, border-color 0.3s, color 0.3s;
+  }
+  .chip.updated { animation: chipFlash 1.4s ease-out; }
+  @keyframes chipFlash {
+    0% { background: var(--accent); border-color: var(--accent); color: #fff; }
+    100% { background: var(--surface2); border-color: var(--border); color: var(--text); }
+  }
+  .chip-empty { font-size: 0.78rem; color: var(--text-muted); font-style: italic; }
+
+  @media (max-width: 900px) {
+    #app { flex-direction: column; height: auto; min-height: 100vh; }
+    #profile-panel {
+      width: 100%; flex: 0 0 auto; max-height: 240px;
+      border-left: none; border-top: 1px solid var(--border);
+    }
+  }
+
   /* Leaflet overrides */
   .leaflet-container { background: #0d1117; }
   .airport-marker {
@@ -134,6 +175,7 @@
 </head>
 <body>
 <div id="app">
+ <div id="main-col">
   <header>
     <div>
       <div style="display:flex;align-items:center;gap:8px">
@@ -165,7 +207,7 @@
       <div class="msg assistant">
         <div class="bubble">
           <p>Welcome! I can find flights and detect hidden city opportunities where booking a connecting route is cheaper than flying direct.</p>
-          <p>Click an airport on the map or type your search below — for example: <em>Find hidden city flights from Warsaw to London</em></p>
+          <p>Tell me a bit about what you're into — routes or countries you're watching (e.g. <em>China</em>), where you usually fly from, your budget, and whether carry-on only works for you. I'll remember it for next time.</p>
         </div>
       </div>
     </div>
@@ -174,6 +216,52 @@
       <button id="send-btn">Send</button>
     </div>
   </div>
+ </div>
+
+ <aside id="profile-panel">
+   <div class="profile-header">
+     <span class="profile-icon">👤</span>
+     <div>
+       <div class="profile-title">Your Profile</div>
+       <div class="profile-subtitle">learned from this conversation</div>
+     </div>
+   </div>
+
+   <div class="profile-section">
+     <div class="profile-label">Baggage</div>
+     <div class="profile-value unset" id="profile-baggage">Not set yet</div>
+   </div>
+
+   <div class="profile-section">
+     <div class="profile-label">Departure airports</div>
+     <div class="chip-row" id="profile-departure"><span class="chip-empty">Not set yet</span></div>
+   </div>
+
+   <div class="profile-section">
+     <div class="profile-label">Countries of interest</div>
+     <div class="chip-row" id="profile-countries"><span class="chip-empty">Not set yet</span></div>
+   </div>
+
+   <div class="profile-section">
+     <div class="profile-label">Destinations</div>
+     <div class="chip-row" id="profile-destinations"><span class="chip-empty">Not set yet</span></div>
+   </div>
+
+   <div class="profile-section">
+     <div class="profile-label">Budget</div>
+     <div class="profile-value unset" id="profile-budget">Not set yet</div>
+   </div>
+
+   <div class="profile-section">
+     <div class="profile-label">Max stops</div>
+     <div class="profile-value unset" id="profile-stops">Not set yet</div>
+   </div>
+
+   <div class="profile-section">
+     <div class="profile-label">Airlines &amp; loyalty</div>
+     <div class="chip-row" id="profile-airlines"><span class="chip-empty">Not set yet</span></div>
+   </div>
+ </aside>
 </div>
 
 <script>
@@ -304,6 +392,74 @@ function updateTokenBar(total) {
     pct > 90 ? '#ef4444' : pct > 70 ? '#eab308' : '#3b82f6';
 }
 
+// ---- Profile panel ----
+let lastProfileChips = {}; // section id -> Set of previously rendered values (for flash-on-new)
+
+function renderChips(sectionId, items) {
+  const el = document.getElementById(sectionId);
+  const prev = lastProfileChips[sectionId] || new Set();
+  const values = (items || []).map(v => String(v));
+
+  if (values.length === 0) {
+    el.innerHTML = '<span class="chip-empty">Not set yet</span>';
+  } else {
+    el.innerHTML = values.map(v => {
+      const isNew = !prev.has(v.toLowerCase());
+      return `<span class="chip${isNew ? ' updated' : ''}">${escHtml(v)}</span>`;
+    }).join('');
+  }
+  lastProfileChips[sectionId] = new Set(values.map(v => v.toLowerCase()));
+}
+
+function renderProfile(prefs) {
+  const baggageEl = document.getElementById('profile-baggage');
+  if (prefs.carry_on_only) {
+    baggageEl.textContent = 'Carry-on only ✓';
+    baggageEl.className = 'profile-value set';
+  } else {
+    baggageEl.textContent = 'Not set yet';
+    baggageEl.className = 'profile-value unset';
+  }
+
+  const departure = [
+    ...(prefs.home_airport ? [prefs.home_airport] : []),
+    ...(prefs.departure_airports || []).filter(a => a !== prefs.home_airport),
+  ];
+  renderChips('profile-departure', departure);
+  renderChips('profile-countries', prefs.countries_of_interest);
+  renderChips('profile-destinations', prefs.destinations);
+  renderChips('profile-airlines', [...(prefs.preferred_airlines || []), ...(prefs.loyalty_programs || [])]);
+
+  const budgetEl = document.getElementById('profile-budget');
+  if (prefs.budget_max) {
+    budgetEl.textContent = `up to ${Number(prefs.budget_max).toLocaleString()} ${prefs.budget_currency || ''}`.trim();
+    budgetEl.className = 'profile-value set';
+  } else {
+    budgetEl.textContent = 'Not set yet';
+    budgetEl.className = 'profile-value unset';
+  }
+
+  const stopsEl = document.getElementById('profile-stops');
+  if (prefs.max_stops != null) {
+    stopsEl.textContent = `${prefs.max_stops} max`;
+    stopsEl.className = 'profile-value set';
+  } else {
+    stopsEl.textContent = 'Not set yet';
+    stopsEl.className = 'profile-value unset';
+  }
+}
+
+async function refreshProfile() {
+  try {
+    const res = await fetch('/api/profile?user_id=demo');
+    if (!res.ok) return;
+    const data = await res.json();
+    renderProfile(data.preferences || {});
+  } catch (_) {}
+}
+
+refreshProfile();
+
 // ---- Chat ----
 const messagesEl = document.getElementById('messages');
 const inputEl = document.getElementById('user-input');
@@ -390,6 +546,7 @@ async function sendMessage() {
         } else if (ev.type === 'done') {
           toolIndicators.forEach(el => el.remove());
           updateTokenBar(ev.total_tokens);
+          refreshProfile();
         } else if (ev.type === 'error') {
           assistantBubble.innerHTML += `<p style="color:#ef4444;margin-top:6px">${escHtml(ev.message)}</p>`;
         }

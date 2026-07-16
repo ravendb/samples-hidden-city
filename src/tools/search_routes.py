@@ -11,7 +11,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from src.db.client import doc_to_dict, get_store
+from src.db.client import doc_to_dict, get_store, load_airport_names
 from src.hidden_city.scorer import RiskFactor, score_candidate
 
 log = logging.getLogger(__name__)
@@ -62,16 +62,29 @@ async def search_routes(
 
         raw_results = [doc_to_dict(r) for r in query.take(max_results)]
 
+    codes: set[str] = set()
+    for r in raw_results:
+        codes.add(r.get("origin"))
+        codes.add(r.get("destination"))
+        codes.update(r.get("hubs", []))
+    airport_names = load_airport_names(store, list(codes))
+
     routes = []
     for r in raw_results:
         stale = _is_stale(r.get("last_updated"))
+        from_code = r.get("origin")
+        to_code = r.get("destination")
         route_entry: dict = {
-            "from": r.get("origin"),
-            "to": r.get("destination"),
+            "from": from_code,
+            "to": to_code,
             "via": r.get("hubs", []),
             "price_usd": r.get("typical_price", {}),
             "stale": stale,
         }
+        if from_code in airport_names:
+            route_entry["from_city"] = airport_names[from_code]["city"]
+        if to_code in airport_names:
+            route_entry["to_city"] = airport_names[to_code]["city"]
         if r.get("depart_date"):
             route_entry["depart_date"] = r["depart_date"]
         if r.get("depart_time"):

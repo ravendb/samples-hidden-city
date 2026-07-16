@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 from pyravendb.commands.commands_data import PutDocumentCommand
 
-from src.db.client import doc_to_dict, get_store
+from src.db.client import doc_to_dict, get_store, load_airport_names
 from src.db.models import RouteDocument, TypicalPrice
 
 log = logging.getLogger(__name__)
@@ -150,7 +150,8 @@ async def get_live_price(
         existing=existing,
     )
 
-    return {
+    names = load_airport_names(get_store(), [origin, destination])
+    response: dict = {
         "found": True,
         "price_usd": result["price_usd"],
         "depart_date": result.get("depart_date"),
@@ -160,3 +161,8 @@ async def get_live_price(
         "duration_min": existing.get("duration_avg_min", 0),
         "stops": result.get("stops", 0),
     }
+    if origin in names:
+        response["from_city"] = names[origin]["city"]
+    if destination in names:
+        response["to_city"] = names[destination]["city"]
+    return response
