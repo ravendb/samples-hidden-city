@@ -1,4 +1,5 @@
 .env
+.env.local
 license.json
 *.local.yaml
 __pycache__/

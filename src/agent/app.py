@@ -21,7 +21,10 @@ from src.db.seed import seed_if_empty
 log = logging.getLogger(__name__)
 app = FastAPI(title="Hidden City Flight Agent")
 
-_UI_PATH = Path(__file__).parent.parent / "chat" / "index.html"
+_CHAT_DIR = Path(__file__).parent.parent / "chat"
+_UI_PATH     = _CHAT_DIR / "index.html"
+_LANDING_PATH = _CHAT_DIR / "landing.html"
+_SETUP_PATH   = _CHAT_DIR / "setup.html"
 
 
 @app.on_event("startup")
@@ -86,11 +89,57 @@ def _load_prior_turns(user_id: str, session_id: str) -> list[dict]:
 
 
 @app.get("/", response_class=HTMLResponse)
+async def landing() -> HTMLResponse:
+    if not _LANDING_PATH.exists():
+        raise HTTPException(status_code=404, detail="Landing page not found")
+    return HTMLResponse(_LANDING_PATH.read_text(encoding="utf-8"))
+
+
+@app.get("/setup", response_class=HTMLResponse)
+async def setup_page() -> HTMLResponse:
+    if not _SETUP_PATH.exists():
+        raise HTTPException(status_code=404, detail="Setup page not found")
+    return HTMLResponse(_SETUP_PATH.read_text(encoding="utf-8"))
+
+
 @app.get("/ui", response_class=HTMLResponse)
 async def ui() -> HTMLResponse:
     if not _UI_PATH.exists():
         raise HTTPException(status_code=404, detail="UI not found")
     return HTMLResponse(_UI_PATH.read_text(encoding="utf-8"))
+
+
+class SetupRequest(BaseModel):
+    anthropic_api_key: str | None = None
+    ravendb_license: str | None = None
+
+
+_ENV_LOCAL = Path(__file__).parent.parent.parent / ".env.local"
+
+
+@app.post("/api/setup")
+async def api_setup(body: SetupRequest) -> dict:
+    """Persist API keys to .env.local (never committed — in .gitignore)."""
+    # Read existing entries so we can merge
+    existing: dict[str, str] = {}
+    if _ENV_LOCAL.exists():
+        for line in _ENV_LOCAL.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if "=" in line and not line.startswith("#"):
+                k, _, v = line.partition("=")
+                existing[k.strip()] = v.strip()
+
+    if body.anthropic_api_key:
+        existing["ANTHROPIC_API_KEY"] = body.anthropic_api_key
+        os.environ["ANTHROPIC_API_KEY"] = body.anthropic_api_key
+
+    if body.ravendb_license:
+        existing["RAVENDB_LICENSE"] = body.ravendb_license
+        os.environ["RAVENDB_LICENSE"] = body.ravendb_license
+
+    lines = [f"{k}={v}" for k, v in existing.items()]
+    _ENV_LOCAL.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return {"status": "ok"}
 
 
 @app.get("/api/airports")
