@@ -81,6 +81,7 @@ Price drops → RavenDB Subscription ──push──▶ Worker → alert
 | **Data Subscriptions** | `src/worker/run.py` | Push-only price-drop alerts — no polling, no message broker needed |
 | **Kubernetes Operator** | `k8s/operator/` | 3-node cluster declared as a CRD; scaling, failover, TLS handled automatically |
 | **Document Expiration** | `src/db/expiration.py` | Price fields auto-expire after 20 min via `@expires` metadata — no manual TTL management |
+| **Attachments** | `src/tools/user_attachments.py`, `/profile` UI | Passport scan, bag photo, preference sheet (PDF) stored as binary blobs on the user doc — not indexed, retrieved whole, never inflating a query |
 
 **How Document Expiration works here:**
 - `ensure_expiration_enabled()` turns the feature on for the database once, at
@@ -95,6 +96,42 @@ Price drops → RavenDB Subscription ──push──▶ Worker → alert
 - Net effect: stale prices disappear on their own. A cache read past its TTL
   is a miss, not stale data — the agent falls through to `get_live_price` and
   the document is rewritten with a fresh 20-minute clock.
+
+**What gets a TTL and what doesn't:**
+
+| Writer | Data | `@expires`? | Why |
+|--------|------|-------------|-----|
+| `src/scraper/run.py` (CronJob, bulk) | Scraped Travelpayouts prices | Yes, 20 min | Genuinely volatile — a fresh price is one `get_live_price` call away |
+| `src/tools/get_live_price.py` (cache miss) | Live Travelpayouts price | Yes, 20 min | Same reasoning — this *is* the live refresh path |
+| `src/db/seed.py` → `seed_routes()` | Hand-curated fixture routes with real `hubs` / `hidden_city_score` | **No** | These demonstrate the hidden-city scoring logic and have no live source to regenerate from — deleting them on a timer would silently break the demo until the next app restart reseeds them |
+| `src/db/seed.py` → `seed_airports()` | Airport reference data (IATA → city/country) | **No** | Static reference data, not a price |
+
+Watch it happen: open RavenDB Studio's `Routes` collection, trigger a live price
+lookup for a route (e.g. ask the agent about a destination not in the fixtures),
+and that document disappears on its own ~20 minutes later — a good demo beat
+for "the database enforces its own freshness, nobody wrote a cleanup job."
+
+**How Attachments work here:**
+- The Profile screen (`/profile`) lets a user upload a passport scan, a bag
+  photo, and a preference sheet — e.g. an exported bucket-list PDF — on top of
+  their structured preferences (name, home airport, budget, carry-on).
+- Each file is stored via RavenDB's attachment API
+  (`PutAttachmentOperation` / `GetAttachmentOperation` in
+  `src/tools/user_attachments.py`), bound to the `users/{user_id}` document as
+  a separate binary stream — not JSON, not indexed, never returned by a
+  document query.
+- Upload/download is a plain REST path (`POST /api/profile/attachment`,
+  `GET /api/profile/attachment/{type}`) — the LLM never touches the binary;
+  it only reads/writes the structured preference fields via
+  `get_user_profile` / `update_user_profile`.
+- The list shown on the Profile screen ("Passport scan — 42 KB, uploaded")
+  comes straight from RavenDB's own attachment metadata
+  (`session.advanced.get_metadata_for(doc)["@attachments"]`) — nothing is
+  duplicated as a field on the document just to track what's been uploaded.
+- Net effect: two cleanly separated channels on the same document — small,
+  queryable preference fields that flow into every chat turn's context, and
+  arbitrarily large binary documents that stay out of that path entirely,
+  fetched whole only when explicitly requested.
 
 ---
 
