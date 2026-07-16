@@ -30,12 +30,12 @@ with every user. RavenDB inside the cluster makes retrieval a local call.
 ```
 Travelpayouts ──(CronJob, 6h)──→ RavenDB (in-cluster)
                                       ↑ ↑
-Kiwi / Travelpayouts ←──(cache miss)── Agent │ └── tool results
+Travelpayouts  ←──(cache miss)── Agent │ └── tool results
                                       │
 User → Chat UI ──────────────────→ Agent (FastAPI)
                                       │
                               only prompt ↓
-                               Anthropic API
+                               OpenAI API
 ```
 
 The agent calls RavenDB as an **LLM tool** — the model decides what to retrieve
@@ -46,7 +46,7 @@ and when. Nothing is blindly injected. Only the user's prompt leaves the cluster
 | Scenario     | What happens                                                         | Egress |
 |--------------|----------------------------------------------------------------------|--------|
 | Cache hit    | Route + price already in RavenDB, agent retrieves locally            | Zero   |
-| Cache miss   | Agent triggers live Travelpayouts call, result written to RavenDB, served  | One    |
+| Cache miss   | Agent triggers Travelpayouts live call, result written to RavenDB,   | One    |
 | Price watch  | RavenDB Subscription pushes price change to agent — no polling       | Zero   |
 
 ## Stack
@@ -56,9 +56,9 @@ and when. Nothing is blindly injected. Only the user's prompt leaves the cluster
 - **Operator**: RavenDB Kubernetes Operator (`RavenDBCluster` CRD)
 - **Agent**: Python + FastAPI
 - **ETL**: RavenDB Subscriptions (Kafka only if multi-source ingestion needed)
-- **Flight APIs**: Kiwi Tequila (live search, hidden city), Travelpayouts (direct prices + bulk cached prices, scraped every 6h)
+- **Flight APIs**: Travelpayouts — bulk cached prices (CronJob, every 6h) and live price lookup on cache miss
 - **Language**: Python (agent, tools, scraper, worker), C# or Python (RavenDB client)
-- **LLM**: claude-sonnet-4-20250514 via Anthropic API — only the user prompt goes outbound
+- **LLM**: gpt-4o-mini via OpenAI API — only the user prompt goes outbound
 
 ## Repo Structure
 
@@ -194,7 +194,7 @@ The model must call RavenDB explicitly as a tool — it decides what to fetch.
 | Tool                 | Description                                                              |
 |----------------------|--------------------------------------------------------------------------|
 | `search_routes`      | Vector + doc query against RavenDB: origin, dest, date, stops, price, semantic similarity |
-| `get_live_price`     | Live call to Kiwi Tequila (hidden city) or Travelpayouts (direct) on cache miss |
+| `get_live_price`     | Live call to Travelpayouts on cache miss — fetches fresh price and writes back to RavenDB |
 | `get_user_profile`   | Read user profile and preferences from RavenDB attachments               |
 | `save_conversation`  | Persist the current turn to RavenDB after each exchange                  |
 
@@ -209,7 +209,7 @@ Outbound payload = system_prompt + user_message + tool_results
                  ≈ 200 + 100 + 800 tokens ≈ 1500 tokens max
 ```
 
-Raw Travelpayouts response (typically 40k–100k tokens) never reaches the model.
+Raw Travelpayouts bulk response (typically 40k–100k tokens) never reaches the model.
 
 ## Hidden City Detection Logic
 
@@ -244,7 +244,7 @@ Contact Omer for operator internals — he wrote it.
 
 ## LLM Configuration
 
-- **Model**: `claude-sonnet-4-20250514` via Anthropic API
+- **Model**: `gpt-4o-mini` via OpenAI API
 - **What goes outbound**: system prompt + user message only — no context payload
 - **Context delivery**: via tool results returned in the same API call, never pre-injected
 - Do not switch models mid-session (breaks conversation continuity)
@@ -264,7 +264,7 @@ the drop-in replacement — the agent tool interface does not change.
 | **Total**           | **~1500**  |
 
 This is the core demo metric. Enforce it, measure it, show it on screen.
-The naive baseline (raw Travelpayouts response in prompt) runs 40k–100k tokens per call.
+The naive baseline (raw Travelpayouts response stuffed into prompt) runs 40k–100k tokens per call.
 
 ## Conversation Memory
 
@@ -311,7 +311,7 @@ Conversation state is a RavenDB document (`sessions/...`), not pod RAM, not Redi
 | Metric                        | Naive baseline               | With RavenDB in-cluster     |
 |-------------------------------|------------------------------|-----------------------------|
 | Tokens per API call           | 40k–100k                     | ~1500                       |
-| Anthropic API cost/day (10k)  | Calculate and show on screen | Calculate and show on screen|
+| OpenAI API cost/day (10k req) | Calculate and show on screen | Calculate and show on screen|
 | Retrieval egress              | Full payload leaves cluster  | Zero (local RavenDB query)  |
 | p95 latency (retrieval)       | External API round trip      | In-cluster query time       |
 | Cache hit rate                | N/A                          | Measure after 24h of data   |
@@ -322,12 +322,12 @@ See @scripts/measure_tokens.py and @scripts/measure_egress.py for tooling.
 
 The presentation shows the same use case rebuilt across three eras — each with a
 concrete cost breakdown. RavenDB appears as the final step, not the starting
-assumption. LLM inference stays external (Anthropic API) throughout all three
+assumption. LLM inference stays external (OpenAI API) throughout all three
 stages — the savings come from what we stop sending, not from where inference runs.
 
-1. **No k8s, naive DB** — full Travelpayouts response stuffed into every prompt, paying for 100k tokens/call, high Anthropic bill
+1. **No k8s, naive DB** — full Travelpayouts response stuffed into every prompt, paying for 100k tokens/call, high OpenAI bill
 2. **K8s, still external DB** — containerized but retrieval still crosses cluster boundary on every request
-3. **K8s + RavenDB in-cluster via Operator** — retrieval is local, 1500 tokens/call to Anthropic, near-zero egress on context
+3. **K8s + RavenDB in-cluster via Operator** — retrieval is local, 1500 tokens/call to OpenAI, near-zero egress on context
 
 Each stage is costed live. The closing slide leaves the architecture open:
 "We kept inference external to show you the savings are purely about context —

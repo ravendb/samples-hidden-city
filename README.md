@@ -18,12 +18,12 @@ conversation.
 
 | Step | What the agent does | Cost |
 |------|---------------------|------|
-| User asks about flights | Agent calls Travelpayouts flight-offers API | 250 KB response, €0.04 egress |
-| Agent summarises results for the LLM | Full JSON sent in the prompt | ~40 000 tokens ≈ $0.48 per turn |
-| User asks a follow-up | Same API call again | Another 250 KB, another $0.48 |
+| User asks about flights | Agent calls Travelpayouts API directly | 250 KB response, €0.04 egress |
+| Agent summarises results for the LLM | Full JSON sent in the prompt | ~40 000 tokens ≈ $0.006 per turn |
+| User asks a follow-up | Same API call again | Another 250 KB, another $0.006 |
 | Price watch (polling) | CronJob hits API every 5 min | 288 API calls/day per route |
 
-At 1 000 daily active users this is **~$480/day in LLM tokens alone** before any
+At 1 000 daily active users this is **~$6/day in LLM tokens alone** before any
 infrastructure costs — and it scales linearly with usage.
 
 ---
@@ -40,7 +40,7 @@ User → Agent (FastAPI) ──tool call──▶ search_routes ──▶ RavenD
                                                               │ cache hit → return
                                                               │ cache miss
                                                               ▼
-                                                    Kiwi / Travelpayouts API
+                                                    Travelpayouts API (live)
                                                     (write-back to RavenDB)
 
 Price drops → RavenDB Subscription ──push──▶ Worker → alert
@@ -51,7 +51,7 @@ Price drops → RavenDB Subscription ──push──▶ Worker → alert
 | Metric | Naive baseline | With RavenDB | Saving |
 |--------|---------------|--------------|--------|
 | Tokens per agent turn (cache hit) | 40 000–100 000 | ~1 500 | **96 %** |
-| LLM cost per 1 000 turns (GPT-4o) | ~$480 | ~$18 | **$462/day** |
+| LLM cost per 1 000 turns (gpt-4o-mini) | ~$6.24 | ~$0.47 | **$5.77/day** |
 | Egress per turn (cache hit) | 250 KB | 0.1 KB | **99.96 %** |
 | Egress cost per 1 000 turns\* | ~$40 | ~$0.02 | **$39.98** |
 | External API calls (price watch) | 288/day/route | 0 (push) | **100 %** |
@@ -59,9 +59,9 @@ Price drops → RavenDB Subscription ──push──▶ Worker → alert
 \*AWS us-east-1 egress pricing, $0.09/GB.
 
 **How these numbers are calculated:**
-- Token baseline: raw Travelpayouts flight-offers response for 3 offers
-  across a popular route is ~40 000 tokens (JSON verbosity). We measured with
-  `tiktoken` on actual API responses; see `scripts/measure_token_cost.py`.
+- Token baseline: raw Travelpayouts bulk response for a typical route query is
+  ~40 000 tokens (JSON verbosity) when stuffed unfiltered into a prompt. We measured
+  with `tiktoken` on actual API responses; see `scripts/measure_tokens.py`.
 - Token budget with RavenDB: system prompt 200 + user message 100 + tool result
   800 + assistant response 400 = 1 500 tokens. Capped in `src/agent/loop.py`.
 - Egress: `curl -o /dev/null -w "%{size_download}"` on Travelpayouts vs a RavenDB
@@ -143,7 +143,7 @@ User → FastAPI → Elasticsearch (routes) + pgvector (embeddings) + Redis
 ### Stage 4 — RavenDB in-cluster  *(this repo)*
 ```
 User → FastAPI → RavenDB (routes + sessions + subscriptions)
-               → Kiwi / Travelpayouts (cache-miss only)
+               → Travelpayouts (cache-miss only, ~5 %)
 ```
 - One database replaces Redis, Postgres, Elasticsearch, and Kafka.
 - Subscriptions replace polling and the message broker entirely.
@@ -278,8 +278,7 @@ missing keys on first run. You can also fill them in manually:
 | Variable | Required | Where to get it |
 |----------|----------|-----------------|
 | `OPENAI_API_KEY` | **Yes** — agent won't start without it | [platform.openai.com](https://platform.openai.com/) → API Keys |
-| `RAVENDB_LICENSE` | **Yes** — free Community license | [ravendb.net/download](https://ravendb.net/download) → register with your email, paste the `.json` license contents |
-| `TRAVELPAYOUTS_TOKEN` | No — used for live price refresh and the bulk scraper CronJob | [app.travelpayouts.com/profile](https://app.travelpayouts.com/profile/) → Aviasales Data API token |
+| `TRAVELPAYOUTS_TOKEN` | No — only needed for live price lookups and bulk scraper | [app.travelpayouts.com/profile](https://app.travelpayouts.com/profile/) → Aviasales Data API token |
 | `RAVENDB_URL` | Yes | `http://localhost:8080` for local dev (already set in `.env.example`) |
 | `RAVENDB_DATABASE` | Yes | `hidden-city` (already set in `.env.example`) |
 
@@ -385,7 +384,7 @@ Or use the Swagger UI at http://localhost:8000/docs.
 Chongqing (IATA: `CKG`) is not in the fixture data, so the agent will:
 1. Call `search_routes(origin="WAW", destination="CKG")` — returns empty.
 2. Call `get_live_price(origin="WAW", destination="CKG", route_type="hidden_city")`
-   — hits Travelpayouts if a token is set, otherwise returns `found: false`.
+   — hits Travelpayouts if token is set, otherwise returns `found: false`.
 3. Explain that no routes were found and suggest nearby hubs (IST, DOH, DXB are
    common transfer points for Central Asia).
 
