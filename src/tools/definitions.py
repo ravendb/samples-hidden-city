@@ -10,7 +10,13 @@ TOOL_DEFINITIONS = [
             "name": "search_routes",
             "description": (
                 "Search RavenDB for flight routes. Supports direct and hidden city lookups. "
-                "Always call this before get_live_price. Returns stale=true if data is >2h old."
+                "Always call this before get_live_price. Returns stale=true if data is >2h old. "
+                "budget_max, budget_currency, countries_of_interest, and carry_on_only are "
+                "auto-filled from the user's saved preferences if you omit them — only pass "
+                "them yourself to override for this one search. "
+                "If no routes are found, may return nearby_alternatives (airport, city, "
+                "distance_km, train) for a nearby airport that was NOT searched — ask the "
+                "user before searching one of them, never substitute silently."
             ),
             "parameters": {
                 "type": "object",
@@ -33,6 +39,19 @@ TOOL_DEFINITIONS = [
                     "carry_on_only": {
                         "type": "boolean",
                         "description": "If true, apply checked-baggage risk penalty to hidden city candidates.",
+                    },
+                    "budget_max": {
+                        "type": "number",
+                        "description": "Exclude routes priced above this amount.",
+                    },
+                    "budget_currency": {
+                        "type": "string",
+                        "description": "Currency for budget_max (e.g. 'PLN'). Only filters when it matches the route's price currency.",
+                    },
+                    "countries_of_interest": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Only return routes whose destination country is in this list.",
                     },
                     "max_results": {
                         "type": "integer",

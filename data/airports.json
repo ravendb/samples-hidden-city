@@ -226,7 +226,19 @@
     "city": "Rome",
     "country": "IT",
     "coordinates": { "lat": 41.8003, "lng": 12.2389 },
-    "nearby": []
+    "nearby": [
+      { "iata": "CIA", "distance_km": 15, "train": false }
+    ]
+  },
+  {
+    "iata": "CIA",
+    "name": "Rome Ciampino",
+    "city": "Rome",
+    "country": "IT",
+    "coordinates": { "lat": 41.7994, "lng": 12.5949 },
+    "nearby": [
+      { "iata": "FCO", "distance_km": 15, "train": false }
+    ]
   },
   {
     "iata": "BER",
@@ -258,7 +270,19 @@
     "city": "Brussels",
     "country": "BE",
     "coordinates": { "lat": 50.9014, "lng": 4.4844 },
-    "nearby": []
+    "nearby": [
+      { "iata": "CRL", "distance_km": 55, "train": false }
+    ]
+  },
+  {
+    "iata": "CRL",
+    "name": "Brussels South Charleroi",
+    "city": "Charleroi",
+    "country": "BE",
+    "coordinates": { "lat": 50.4592, "lng": 4.4525 },
+    "nearby": [
+      { "iata": "BRU", "distance_km": 55, "train": false }
+    ]
   },
   {
     "iata": "LIS",
@@ -298,7 +322,19 @@
     "city": "Stockholm",
     "country": "SE",
     "coordinates": { "lat": 59.6519, "lng": 17.9186 },
-    "nearby": []
+    "nearby": [
+      { "iata": "NYO", "distance_km": 100, "train": false }
+    ]
+  },
+  {
+    "iata": "NYO",
+    "name": "Stockholm Skavsta",
+    "city": "Nykoping",
+    "country": "SE",
+    "coordinates": { "lat": 58.7886, "lng": 16.9122 },
+    "nearby": [
+      { "iata": "ARN", "distance_km": 100, "train": false }
+    ]
   },
   {
     "iata": "OSL",
@@ -306,7 +342,19 @@
     "city": "Oslo",
     "country": "NO",
     "coordinates": { "lat": 60.1939, "lng": 11.1004 },
-    "nearby": []
+    "nearby": [
+      { "iata": "TRF", "distance_km": 110, "train": false }
+    ]
+  },
+  {
+    "iata": "TRF",
+    "name": "Oslo Sandefjord Torp",
+    "city": "Sandefjord",
+    "country": "NO",
+    "coordinates": { "lat": 59.1867, "lng": 10.2586 },
+    "nearby": [
+      { "iata": "OSL", "distance_km": 110, "train": false }
+    ]
   },
   {
     "iata": "HEL",
@@ -518,7 +566,19 @@
     "city": "Seoul",
     "country": "KR",
     "coordinates": { "lat": 37.4602, "lng": 126.4407 },
-    "nearby": []
+    "nearby": [
+      { "iata": "GMP", "distance_km": 50, "train": true }
+    ]
+  },
+  {
+    "iata": "GMP",
+    "name": "Seoul Gimpo",
+    "city": "Seoul",
+    "country": "KR",
+    "coordinates": { "lat": 37.5583, "lng": 126.7906 },
+    "nearby": [
+      { "iata": "ICN", "distance_km": 50, "train": true }
+    ]
   },
   {
     "iata": "BKK",
@@ -526,7 +586,19 @@
     "city": "Bangkok",
     "country": "TH",
     "coordinates": { "lat": 13.6900, "lng": 100.7501 },
-    "nearby": []
+    "nearby": [
+      { "iata": "DMK", "distance_km": 25, "train": true }
+    ]
+  },
+  {
+    "iata": "DMK",
+    "name": "Bangkok Don Mueang",
+    "city": "Bangkok",
+    "country": "TH",
+    "coordinates": { "lat": 13.9126, "lng": 100.6068 },
+    "nearby": [
+      { "iata": "BKK", "distance_km": 25, "train": true }
+    ]
   },
   {
     "iata": "SIN",
@@ -686,7 +758,19 @@
     "city": "Mexico City",
     "country": "MX",
     "coordinates": { "lat": 19.4363, "lng": -99.0721 },
-    "nearby": []
+    "nearby": [
+      { "iata": "TLC", "distance_km": 65, "train": false }
+    ]
+  },
+  {
+    "iata": "TLC",
+    "name": "Toluca International",
+    "city": "Toluca",
+    "country": "MX",
+    "coordinates": { "lat": 19.3370, "lng": -99.5661 },
+    "nearby": [
+      { "iata": "MEX", "distance_km": 65, "train": false }
+    ]
   },
   {
     "iata": "BOG",
@@ -718,7 +802,19 @@
     "city": "Buenos Aires",
     "country": "AR",
     "coordinates": { "lat": -34.8222, "lng": -58.5358 },
-    "nearby": []
+    "nearby": [
+      { "iata": "AEP", "distance_km": 40, "train": false }
+    ]
+  },
+  {
+    "iata": "AEP",
+    "name": "Buenos Aires Aeroparque",
+    "city": "Buenos Aires",
+    "country": "AR",
+    "coordinates": { "lat": -34.5592, "lng": -58.4156 },
+    "nearby": [
+      { "iata": "EZE", "distance_km": 40, "train": false }
+    ]
   },
   {
     "iata": "GRU",
@@ -726,7 +822,19 @@
     "city": "Sao Paulo",
     "country": "BR",
     "coordinates": { "lat": -23.4356, "lng": -46.4731 },
-    "nearby": []
+    "nearby": [
+      { "iata": "VCP", "distance_km": 99, "train": false }
+    ]
+  },
+  {
+    "iata": "VCP",
+    "name": "Campinas Viracopos",
+    "city": "Campinas",
+    "country": "BR",
+    "coordinates": { "lat": -23.0074, "lng": -47.1345 },
+    "nearby": [
+      { "iata": "GRU", "distance_km": 99, "train": false }
+    ]
   },
   {
     "iata": "BSB",

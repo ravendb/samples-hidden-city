@@ -15,6 +15,11 @@ from pyravendb.raven_operations.maintenance_operations import MaintenanceOperati
 
 PRICE_TTL_MINUTES = 20
 
+# The license on this instance rejects a delete-sweep frequency below 36h;
+# the 20-min @expires TTL on documents still applies immediately at query
+# time regardless of how often the physical cleanup sweep runs.
+EXPIRATION_DELETE_FREQUENCY_SEC = 36 * 60 * 60
+
 
 class ConfigureExpirationOperation(MaintenanceOperation):
     """Turns on the Expiration feature for the database (safe to call repeatedly)."""
@@ -28,7 +33,10 @@ class ConfigureExpirationOperation(MaintenanceOperation):
 
         def create_request(self, server_node):
             self.url = f"{server_node.url}/databases/{server_node.database}/admin/expiration/config"
-            self.data = {"Disabled": False, "DeleteFrequencyInSec": 60}
+            self.data = {
+                "Disabled": False,
+                "DeleteFrequencyInSec": EXPIRATION_DELETE_FREQUENCY_SEC,
+            }
 
         def set_response(self, response):
             try:

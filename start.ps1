@@ -145,6 +145,7 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 Write-Ok "RavenDB ready"
+Write-Host "  RavenDB Studio: http://localhost:8080" -ForegroundColor Gray
 
 # --- step 2: seed (optional) ---
 if (-not $SkipSeed) {

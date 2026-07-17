@@ -17,9 +17,24 @@ _TOOLS = {
 }
 
 
-async def dispatch_tool(name: str, tool_input: dict) -> dict:
+_SEARCH_PREFERENCE_DEFAULTS = ("carry_on_only", "budget_max", "budget_currency", "countries_of_interest")
+
+
+def _apply_search_preferences(tool_input: dict, preferences: dict) -> dict:
+    """Fill search_routes filters from saved preferences when the model didn't pass
+    them itself — enforces preference filtering deterministically instead of relying
+    on the model to remember and apply it consistently on every call."""
+    merged = dict(tool_input)
+    for key in _SEARCH_PREFERENCE_DEFAULTS:
+        merged.setdefault(key, preferences.get(key))
+    return merged
+
+
+async def dispatch_tool(name: str, tool_input: dict, preferences: dict | None = None) -> dict:
     fn = _TOOLS.get(name)
     if fn is None:
         raise ValueError(f"Unknown tool: {name!r}")
+    if name == "search_routes" and preferences:
+        tool_input = _apply_search_preferences(tool_input, preferences)
     log.info("Dispatching tool %s with input %s", name, tool_input)
     return await fn(**tool_input)

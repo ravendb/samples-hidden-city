@@ -281,6 +281,8 @@ async def chat(request: ChatRequest) -> ChatResponse:
 
     if result.tool_token_warnings:
         log.warning("Token budget warnings: %s", result.tool_token_warnings)
+    if result.grounding_warnings:
+        log.warning("Grounding warnings: %s", result.grounding_warnings)
 
     return ChatResponse(
         response=result.response,

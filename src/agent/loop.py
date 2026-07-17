@@ -7,6 +7,7 @@ The loop logs actual usage from the API response so measure_tokens.py can track 
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from typing import AsyncGenerator
 
@@ -23,6 +24,9 @@ MAX_RESPONSE_TOKENS = 400
 MAX_ITERATIONS = 10
 WARN_TOOL_TOKENS = 800  # log a warning when tool results exceed this
 
+# Numbers with 2+ digits — catches prices/scores but not stray single digits ("1 stop").
+_NUMBER_RE = re.compile(r"\d{2,}(?:[.,]\d+)?")
+
 
 @dataclass
 class AgentResult:
@@ -32,6 +36,7 @@ class AgentResult:
     tool_calls: int = 0
     iterations: int = 0
     tool_token_warnings: list[str] = field(default_factory=list)
+    grounding_warnings: list[str] = field(default_factory=list)
 
     @property
     def total_tokens(self) -> int:
@@ -48,6 +53,18 @@ def _truncate_tool_result(result_json: str, max_tokens: int = WARN_TOOL_TOKENS) 
     if len(result_json) <= max_chars:
         return result_json
     return result_json[:max_chars] + ' "…truncated"}'
+
+
+def _find_ungrounded_numbers(response_text: str, known_data: str) -> list[str]:
+    """Flag numbers (likely prices/scores) in the reply that don't appear anywhere in
+    the system prompt (preloaded preferences), the user's message, or this turn's tool
+    results. A hit doesn't prove hallucination (the model may compute a % savings), but
+    it's the cheapest mechanical check for the "never state a price ... not returned by
+    a tool" rule in SYSTEM_PROMPT — cheaper than parsing city/IATA names out of prose.
+    """
+    in_response = set(_NUMBER_RE.findall(response_text))
+    in_data = set(_NUMBER_RE.findall(known_data))
+    return sorted(in_response - in_data)
 
 
 def _format_preferences(preferences: dict | None) -> str:
@@ -122,12 +139,19 @@ async def run_agent(
     total_output = 0
     tool_calls = 0
     token_warnings: list[str] = []
+    grounding_warnings: list[str] = []
+    tool_result_texts: list[str] = []
 
     for iteration in range(1, MAX_ITERATIONS + 1):
+        # Force at least one tool call on the first turn — otherwise "auto" lets the
+        # model skip search_routes/get_live_price entirely and answer from parametric
+        # knowledge, which is the main way ungrounded city names/prices sneak in.
+        tool_choice = "required" if iteration == 1 else "auto"
         response = await client.chat.completions.create(
             model=os.getenv("LLM_MODEL", _DEFAULT_MODEL),
             max_tokens=MAX_RESPONSE_TOKENS,
             tools=TOOL_DEFINITIONS,
+            tool_choice=tool_choice,
             messages=messages,
         )
 
@@ -146,6 +170,14 @@ async def run_agent(
             text = choice.message.content
             if text is None:
                 raise ValueError("OpenAI returned stop with no text content")
+
+            known_data = system_content + user_message + "".join(tool_result_texts)
+            ungrounded = _find_ungrounded_numbers(text, known_data)
+            if ungrounded:
+                warning = f"reply contains numbers not seen in tool output or preferences: {ungrounded}"
+                log.warning(warning)
+                grounding_warnings.append(warning)
+
             return AgentResult(
                 response=text,
                 input_tokens=total_input,
@@ -153,6 +185,7 @@ async def run_agent(
                 tool_calls=tool_calls,
                 iterations=iteration,
                 tool_token_warnings=token_warnings,
+                grounding_warnings=grounding_warnings,
             )
 
         if choice.finish_reason == "tool_calls":
@@ -176,7 +209,7 @@ async def run_agent(
             for tc in choice.message.tool_calls or []:
                 tool_calls += 1
                 tool_input = json.loads(tc.function.arguments)
-                result = await dispatch_tool(tc.function.name, tool_input)
+                result = await dispatch_tool(tc.function.name, tool_input, preferences=preferences)
                 result_json = json.dumps(result, default=str)
 
                 estimated = _estimate_tokens(result_json)
@@ -186,6 +219,7 @@ async def run_agent(
                     token_warnings.append(warning)
                     result_json = _truncate_tool_result(result_json)
 
+                tool_result_texts.append(result_json)
                 tool_results.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
@@ -213,20 +247,24 @@ async def stream_agent(
         + [{"role": "user", "content": user_message}]
     )
     total_input, total_output, tool_calls_count = 0, 0, 0
+    tool_result_texts: list[str] = []
 
     def sse(data: dict) -> str:
         return f"data: {json.dumps(data)}\n\n"
 
-    for _ in range(MAX_ITERATIONS):
+    for iteration in range(1, MAX_ITERATIONS + 1):
         accumulated_content: list[str] = []
         accumulated_tool_calls: dict[int, dict] = {}
         finish_reason = None
 
+        # Same first-turn grounding guard as run_agent — see comment there.
+        tool_choice = "required" if iteration == 1 else "auto"
         stream = await client.chat.completions.create(
             model=os.getenv("LLM_MODEL", _DEFAULT_MODEL),
             max_tokens=MAX_RESPONSE_TOKENS,
             messages=messages,
             tools=TOOL_DEFINITIONS,
+            tool_choice=tool_choice,
             stream=True,
             stream_options={"include_usage": True},
         )
@@ -259,12 +297,22 @@ async def stream_agent(
                             accumulated_tool_calls[idx]["arguments"] += tc_delta.function.arguments
 
         if finish_reason == "stop":
+            final_text = "".join(accumulated_content)
+            known_data = system_content + user_message + "".join(tool_result_texts)
+            ungrounded = _find_ungrounded_numbers(final_text, known_data)
+            if ungrounded:
+                log.warning(
+                    "reply contains numbers not seen in tool output or preferences: %s",
+                    ungrounded,
+                )
+
             yield sse({
                 "type": "done",
                 "input_tokens": total_input,
                 "output_tokens": total_output,
                 "total_tokens": total_input + total_output,
                 "tool_calls": tool_calls_count,
+                "grounding_warnings": ungrounded,
             })
             return
 
@@ -288,11 +336,12 @@ async def stream_agent(
                 tool_calls_count += 1
                 yield sse({"type": "tool_call", "name": tc["name"]})
                 tool_input = json.loads(tc["arguments"])
-                result = await dispatch_tool(tc["name"], tool_input)
+                result = await dispatch_tool(tc["name"], tool_input, preferences=preferences)
                 result_json = json.dumps(result, default=str)
                 if _estimate_tokens(result_json) > WARN_TOOL_TOKENS:
                     log.warning("%s result over budget in stream", tc["name"])
                     result_json = _truncate_tool_result(result_json)
+                tool_result_texts.append(result_json)
                 tool_results.append({
                     "role": "tool",
                     "tool_call_id": tc["id"],

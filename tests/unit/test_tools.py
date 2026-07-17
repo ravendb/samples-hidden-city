@@ -83,6 +83,31 @@ class TestSearchRoutes:
 
         assert result["count"] == 0
         assert result["routes"] == []
+        assert "nearby_alternatives" not in result
+
+    @pytest.mark.asyncio
+    async def test_empty_results_surfaces_nearby_alternative(self):
+        """No KRK routes are seeded, but KRK's airport doc lists WAW as nearby (290km,
+        train available) — the tool should surface it for the agent to ask about,
+        never auto-substitute it into the results."""
+        mock_store = self._mock_session_with_routes([])
+        mock_store.open_session.return_value.load.return_value = {
+            "nearby": [{"iata": "WAW", "distance_km": 290, "train": True}]
+        }
+
+        with (
+            patch("src.tools.search_routes.get_store", return_value=mock_store),
+            patch(
+                "src.tools.search_routes.load_airport_names",
+                return_value={"WAW": {"city": "Warsaw"}},
+            ),
+        ):
+            result = await search_routes(origin="KRK", destination="LHR")
+
+        assert result["count"] == 0
+        assert result["nearby_alternatives"] == [
+            {"airport": "WAW", "distance_km": 290, "train": True, "city": "Warsaw"}
+        ]
 
     @pytest.mark.asyncio
     async def test_carry_on_lowers_hidden_city_score(self):
@@ -128,6 +153,90 @@ class TestSearchRoutes:
             result = await search_routes(origin="WAW")
 
         assert result["routes"][0]["stale"] is True
+
+    @pytest.mark.asyncio
+    async def test_budget_max_excludes_pricier_routes(self):
+        routes = [
+            {
+                "origin": "WAW",
+                "destination": "JFK",
+                "hubs": ["LHR"],
+                "typical_price": {"min": 185, "max": 280, "currency": "USD"},
+                "hidden_city_score": 0.0,
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+            },
+            {
+                "origin": "WAW",
+                "destination": "LHR",
+                "hubs": [],
+                "typical_price": {"min": 90, "max": 150, "currency": "USD"},
+                "hidden_city_score": 0.0,
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+            },
+        ]
+        mock_store = self._mock_session_with_routes(routes)
+
+        with patch("src.tools.search_routes.get_store", return_value=mock_store):
+            result = await search_routes(origin="WAW", budget_max=200, budget_currency="USD")
+
+        assert result["count"] == 1
+        assert result["routes"][0]["to"] == "LHR"
+
+    @pytest.mark.asyncio
+    async def test_budget_max_ignored_on_currency_mismatch(self):
+        """No FX conversion — a route priced in a different currency is left unfiltered."""
+        routes = [
+            {
+                "origin": "WAW",
+                "destination": "JFK",
+                "hubs": ["LHR"],
+                "typical_price": {"min": 1000, "max": 1500, "currency": "PLN"},
+                "hidden_city_score": 0.0,
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+            }
+        ]
+        mock_store = self._mock_session_with_routes(routes)
+
+        with patch("src.tools.search_routes.get_store", return_value=mock_store):
+            result = await search_routes(origin="WAW", budget_max=200, budget_currency="USD")
+
+        assert result["count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_countries_of_interest_filters_by_destination_country(self):
+        routes = [
+            {
+                "origin": "WAW",
+                "destination": "JFK",
+                "hubs": ["LHR"],
+                "typical_price": {"min": 185, "max": 280},
+                "hidden_city_score": 0.0,
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+            },
+            {
+                "origin": "WAW",
+                "destination": "LHR",
+                "hubs": [],
+                "typical_price": {"min": 90, "max": 150},
+                "hidden_city_score": 0.0,
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+            },
+        ]
+        mock_store = self._mock_session_with_routes(routes)
+        airport_countries = {
+            "WAW": {"city": "Warsaw", "country": "Poland"},
+            "JFK": {"city": "New York", "country": "United States"},
+            "LHR": {"city": "London", "country": "United Kingdom"},
+        }
+
+        with (
+            patch("src.tools.search_routes.get_store", return_value=mock_store),
+            patch("src.tools.search_routes.load_airport_names", return_value=airport_countries),
+        ):
+            result = await search_routes(origin="WAW", countries_of_interest=["United Kingdom"])
+
+        assert result["count"] == 1
+        assert result["routes"][0]["to"] == "LHR"
 
     @pytest.mark.asyncio
     async def test_result_within_800_token_budget(self):
