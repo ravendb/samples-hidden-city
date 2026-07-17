@@ -7,8 +7,8 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 
 _ENV_LOCAL = Path(__file__).parent.parent.parent / ".env.local"
 _LICENSE_FILE = Path(__file__).parent.parent.parent / "license.json"
@@ -21,6 +21,15 @@ from src.agent.loop import AgentResult, run_agent, stream_agent
 from src.db.client import doc_to_dict, get_store
 from src.db.models import ConversationTurn
 from src.db.seed import seed_if_empty
+from src.tools.get_user_profile import DEFAULT_PREFERENCES, build_preferences
+from src.tools.get_user_profile import get_user_profile as _get_user_profile
+from src.tools.update_user_profile import update_user_profile as _update_user_profile
+from src.tools.user_attachments import (
+    ATTACHMENT_TYPES,
+    get_user_attachment,
+    list_user_attachments,
+    save_user_attachment,
+)
 
 log = logging.getLogger(__name__)
 app = FastAPI(title="Hidden City Flight Agent")
@@ -29,6 +38,7 @@ _CHAT_DIR = Path(__file__).parent.parent / "chat"
 _UI_PATH     = _CHAT_DIR / "index.html"
 _LANDING_PATH = _CHAT_DIR / "landing.html"
 _SETUP_PATH   = _CHAT_DIR / "setup.html"
+_PROFILE_PATH = _CHAT_DIR / "profile.html"
 
 
 @app.on_event("startup")
@@ -77,19 +87,33 @@ class ChatResponse(BaseModel):
     tool_calls: int
 
 
-def _load_prior_turns(user_id: str, session_id: str) -> list[dict]:
-    """Load last 10 turns from RavenDB session document as OpenAI messages."""
-    doc_id = f"sessions/{user_id}-{session_id}"
+def _load_conversation_context(user_id: str, session_id: str) -> tuple[list[dict], dict]:
+    """Load prior turns and the user profile in a single RavenDB round trip.
+
+    RavenDB feature used: batched multi-document Load. `session.load([id1, id2])`
+    issues one GetDocumentCommand for every id passed, regardless of collection —
+    so the session document (Sessions) and the profile document (Users) come back
+    in a single request instead of two. This is what lets every turn deterministically
+    preload the user's preferences into the system prompt (see loop.py) without
+    depending on the model choosing to call get_user_profile as a tool.
+    """
+    session_doc_id = f"sessions/{user_id}-{session_id}"
+    user_doc_id = f"users/{user_id}"
+
     store = get_store()
     with store.open_session() as session:
-        raw = session.load(doc_id)
+        session_raw, user_raw = session.load([session_doc_id, user_doc_id])
 
-    if raw is None:
-        return []
+    prior_turns: list[dict] = []
+    if session_raw is not None:
+        turns = doc_to_dict(session_raw).get("turns", [])[-10:]
+        prior_turns = [{"role": t["role"], "content": t["content"]} for t in turns]
 
-    raw_dict = doc_to_dict(raw)
-    turns = raw_dict.get("turns", [])[-10:]
-    return [{"role": t["role"], "content": t["content"]} for t in turns]
+    preferences = dict(DEFAULT_PREFERENCES)
+    if user_raw is not None:
+        preferences = build_preferences(doc_to_dict(user_raw))
+
+    return prior_turns, preferences
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -111,6 +135,13 @@ async def ui() -> HTMLResponse:
     if not _UI_PATH.exists():
         raise HTTPException(status_code=404, detail="UI not found")
     return HTMLResponse(_UI_PATH.read_text(encoding="utf-8"))
+
+
+@app.get("/profile", response_class=HTMLResponse)
+async def profile_page() -> HTMLResponse:
+    if not _PROFILE_PATH.exists():
+        raise HTTPException(status_code=404, detail="Profile page not found")
+    return HTMLResponse(_PROFILE_PATH.read_text(encoding="utf-8"))
 
 
 class SetupRequest(BaseModel):
@@ -171,15 +202,81 @@ async def get_routes() -> list[dict]:
     return result
 
 
+@app.get("/api/profile")
+async def get_profile(user_id: str = "demo") -> dict:
+    """Return the user's saved profile/preferences for the chat UI profile panel."""
+    return await _get_user_profile(user_id)
+
+
+class ProfileDetailsRequest(BaseModel):
+    user_id: str = "demo"
+    name: str | None = None
+    carry_on_only: bool | None = None
+    home_airport: str | None = None
+    budget_max: float | None = None
+    budget_currency: str | None = None
+
+
+@app.post("/api/profile/details")
+async def save_profile_details(body: ProfileDetailsRequest) -> dict:
+    """Save structured profile fields submitted from the Profile screen's form."""
+    return await _update_user_profile(
+        user_id=body.user_id,
+        name=body.name,
+        carry_on_only=body.carry_on_only,
+        home_airport=body.home_airport,
+        budget_max=body.budget_max,
+        budget_currency=body.budget_currency,
+    )
+
+
+@app.get("/api/profile/attachments")
+async def get_profile_attachments(user_id: str = "demo") -> list[dict]:
+    """List attachment metadata (name, content type, size) for the profile screen."""
+    return list_user_attachments(user_id)
+
+
+@app.post("/api/profile/attachment")
+async def upload_profile_attachment(
+    user_id: str = Form("demo"),
+    attachment_type: str = Form(...),
+    file: UploadFile = File(...),
+) -> dict:
+    """Upload a passport scan, bag photo, or preference sheet (PDF) as a RavenDB attachment."""
+    if attachment_type not in ATTACHMENT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"attachment_type must be one of {ATTACHMENT_TYPES}",
+        )
+    content = await file.read()
+    return save_user_attachment(
+        user_id=user_id,
+        attachment_type=attachment_type,
+        filename=file.filename or attachment_type,
+        content=content,
+        content_type=file.content_type or "application/octet-stream",
+    )
+
+
+@app.get("/api/profile/attachment/{attachment_type}")
+async def download_profile_attachment(attachment_type: str, user_id: str = "demo") -> Response:
+    """Stream back a previously uploaded attachment (e.g. to preview/download it)."""
+    result = get_user_attachment(user_id, attachment_type)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    return Response(content=result["content"], media_type=result["content_type"])
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest) -> ChatResponse:
-    prior_turns = _load_prior_turns(request.user_id, request.session_id)
+    prior_turns, preferences = _load_conversation_context(request.user_id, request.session_id)
 
     result: AgentResult = await run_agent(
         user_message=request.message,
         prior_turns=prior_turns,
         user_id=request.user_id,
         session_id=request.session_id,
+        preferences=preferences,
     )
 
     if result.tool_token_warnings:
@@ -198,7 +295,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
 @app.post("/chat/stream")
 async def chat_stream(request: ChatRequest) -> StreamingResponse:
     import json
-    prior_turns = _load_prior_turns(request.user_id, request.session_id)
+    prior_turns, preferences = _load_conversation_context(request.user_id, request.session_id)
 
     async def generate():
         try:
@@ -207,6 +304,7 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                 prior_turns=prior_turns,
                 user_id=request.user_id,
                 session_id=request.session_id,
+                preferences=preferences,
             ):
                 yield chunk
         except Exception as exc:

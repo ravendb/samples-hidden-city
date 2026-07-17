@@ -35,6 +35,32 @@
     ]
   },
   {
+    "iata": "WRO",
+    "name": "Wroclaw Copernicus",
+    "city": "Wroclaw",
+    "country": "PL",
+    "coordinates": { "lat": 51.1027, "lng": 16.8858 },
+    "nearby": [
+      { "iata": "KTW", "distance_km": 170, "train": true }
+    ]
+  },
+  {
+    "iata": "GDN",
+    "name": "Gdansk Lech Walesa",
+    "city": "Gdansk",
+    "country": "PL",
+    "coordinates": { "lat": 54.3776, "lng": 18.4662 },
+    "nearby": []
+  },
+  {
+    "iata": "POZ",
+    "name": "Poznan Lawica",
+    "city": "Poznan",
+    "country": "PL",
+    "coordinates": { "lat": 52.4210, "lng": 16.8263 },
+    "nearby": []
+  },
+  {
     "iata": "LHR",
     "name": "London Heathrow",
     "city": "London",
@@ -185,5 +211,537 @@
     "nearby": [
       { "iata": "PKX", "distance_km": 67, "train": true }
     ]
+  },
+  {
+    "iata": "MAD",
+    "name": "Madrid Barajas",
+    "city": "Madrid",
+    "country": "ES",
+    "coordinates": { "lat": 40.4983, "lng": -3.5676 },
+    "nearby": []
+  },
+  {
+    "iata": "FCO",
+    "name": "Rome Fiumicino",
+    "city": "Rome",
+    "country": "IT",
+    "coordinates": { "lat": 41.8003, "lng": 12.2389 },
+    "nearby": []
+  },
+  {
+    "iata": "BER",
+    "name": "Berlin Brandenburg",
+    "city": "Berlin",
+    "country": "DE",
+    "coordinates": { "lat": 52.3667, "lng": 13.5033 },
+    "nearby": []
+  },
+  {
+    "iata": "VIE",
+    "name": "Vienna International",
+    "city": "Vienna",
+    "country": "AT",
+    "coordinates": { "lat": 48.1103, "lng": 16.5697 },
+    "nearby": []
+  },
+  {
+    "iata": "ZRH",
+    "name": "Zurich",
+    "city": "Zurich",
+    "country": "CH",
+    "coordinates": { "lat": 47.4647, "lng": 8.5492 },
+    "nearby": []
+  },
+  {
+    "iata": "BRU",
+    "name": "Brussels",
+    "city": "Brussels",
+    "country": "BE",
+    "coordinates": { "lat": 50.9014, "lng": 4.4844 },
+    "nearby": []
+  },
+  {
+    "iata": "LIS",
+    "name": "Lisbon Humberto Delgado",
+    "city": "Lisbon",
+    "country": "PT",
+    "coordinates": { "lat": 38.7813, "lng": -9.1359 },
+    "nearby": []
+  },
+  {
+    "iata": "ATH",
+    "name": "Athens International",
+    "city": "Athens",
+    "country": "GR",
+    "coordinates": { "lat": 37.9364, "lng": 23.9445 },
+    "nearby": []
+  },
+  {
+    "iata": "DUB",
+    "name": "Dublin",
+    "city": "Dublin",
+    "country": "IE",
+    "coordinates": { "lat": 53.4213, "lng": -6.2701 },
+    "nearby": []
+  },
+  {
+    "iata": "CPH",
+    "name": "Copenhagen Kastrup",
+    "city": "Copenhagen",
+    "country": "DK",
+    "coordinates": { "lat": 55.6180, "lng": 12.6560 },
+    "nearby": []
+  },
+  {
+    "iata": "ARN",
+    "name": "Stockholm Arlanda",
+    "city": "Stockholm",
+    "country": "SE",
+    "coordinates": { "lat": 59.6519, "lng": 17.9186 },
+    "nearby": []
+  },
+  {
+    "iata": "OSL",
+    "name": "Oslo Gardermoen",
+    "city": "Oslo",
+    "country": "NO",
+    "coordinates": { "lat": 60.1939, "lng": 11.1004 },
+    "nearby": []
+  },
+  {
+    "iata": "HEL",
+    "name": "Helsinki Vantaa",
+    "city": "Helsinki",
+    "country": "FI",
+    "coordinates": { "lat": 60.3172, "lng": 24.9633 },
+    "nearby": []
+  },
+  {
+    "iata": "PRG",
+    "name": "Prague Vaclav Havel",
+    "city": "Prague",
+    "country": "CZ",
+    "coordinates": { "lat": 50.1008, "lng": 14.2600 },
+    "nearby": []
+  },
+  {
+    "iata": "BUD",
+    "name": "Budapest Ferenc Liszt",
+    "city": "Budapest",
+    "country": "HU",
+    "coordinates": { "lat": 47.4298, "lng": 19.2611 },
+    "nearby": []
+  },
+  {
+    "iata": "OTP",
+    "name": "Bucharest Henri Coanda",
+    "city": "Bucharest",
+    "country": "RO",
+    "coordinates": { "lat": 44.5711, "lng": 26.0850 },
+    "nearby": []
+  },
+  {
+    "iata": "SOF",
+    "name": "Sofia",
+    "city": "Sofia",
+    "country": "BG",
+    "coordinates": { "lat": 42.6967, "lng": 23.4114 },
+    "nearby": []
+  },
+  {
+    "iata": "BEG",
+    "name": "Belgrade Nikola Tesla",
+    "city": "Belgrade",
+    "country": "RS",
+    "coordinates": { "lat": 44.8184, "lng": 20.3091 },
+    "nearby": []
+  },
+  {
+    "iata": "ZAG",
+    "name": "Zagreb Franjo Tudman",
+    "city": "Zagreb",
+    "country": "HR",
+    "coordinates": { "lat": 45.7429, "lng": 16.0688 },
+    "nearby": []
+  },
+  {
+    "iata": "KBP",
+    "name": "Kyiv Boryspil",
+    "city": "Kyiv",
+    "country": "UA",
+    "coordinates": { "lat": 50.3450, "lng": 30.8947 },
+    "nearby": []
+  },
+  {
+    "iata": "SVO",
+    "name": "Moscow Sheremetyevo",
+    "city": "Moscow",
+    "country": "RU",
+    "coordinates": { "lat": 55.9726, "lng": 37.4146 },
+    "nearby": []
+  },
+  {
+    "iata": "KEF",
+    "name": "Reykjavik Keflavik",
+    "city": "Reykjavik",
+    "country": "IS",
+    "coordinates": { "lat": 63.9850, "lng": -22.6056 },
+    "nearby": []
+  },
+  {
+    "iata": "VNO",
+    "name": "Vilnius",
+    "city": "Vilnius",
+    "country": "LT",
+    "coordinates": { "lat": 54.6341, "lng": 25.2858 },
+    "nearby": []
+  },
+  {
+    "iata": "RIX",
+    "name": "Riga",
+    "city": "Riga",
+    "country": "LV",
+    "coordinates": { "lat": 56.9236, "lng": 23.9711 },
+    "nearby": []
+  },
+  {
+    "iata": "TLL",
+    "name": "Tallinn Lennart Meri",
+    "city": "Tallinn",
+    "country": "EE",
+    "coordinates": { "lat": 59.4133, "lng": 24.8328 },
+    "nearby": []
+  },
+  {
+    "iata": "TLV",
+    "name": "Tel Aviv Ben Gurion",
+    "city": "Tel Aviv",
+    "country": "IL",
+    "coordinates": { "lat": 32.0055, "lng": 34.8854 },
+    "nearby": []
+  },
+  {
+    "iata": "CAI",
+    "name": "Cairo International",
+    "city": "Cairo",
+    "country": "EG",
+    "coordinates": { "lat": 30.1219, "lng": 31.4056 },
+    "nearby": []
+  },
+  {
+    "iata": "RUH",
+    "name": "Riyadh King Khalid",
+    "city": "Riyadh",
+    "country": "SA",
+    "coordinates": { "lat": 24.9576, "lng": 46.6988 },
+    "nearby": []
+  },
+  {
+    "iata": "AMM",
+    "name": "Amman Queen Alia",
+    "city": "Amman",
+    "country": "JO",
+    "coordinates": { "lat": 31.7226, "lng": 35.9932 },
+    "nearby": []
+  },
+  {
+    "iata": "NBO",
+    "name": "Nairobi Jomo Kenyatta",
+    "city": "Nairobi",
+    "country": "KE",
+    "coordinates": { "lat": -1.3192, "lng": 36.9278 },
+    "nearby": []
+  },
+  {
+    "iata": "JNB",
+    "name": "Johannesburg OR Tambo",
+    "city": "Johannesburg",
+    "country": "ZA",
+    "coordinates": { "lat": -26.1392, "lng": 28.2460 },
+    "nearby": []
+  },
+  {
+    "iata": "CPT",
+    "name": "Cape Town International",
+    "city": "Cape Town",
+    "country": "ZA",
+    "coordinates": { "lat": -33.9715, "lng": 18.6021 },
+    "nearby": []
+  },
+  {
+    "iata": "LOS",
+    "name": "Lagos Murtala Muhammed",
+    "city": "Lagos",
+    "country": "NG",
+    "coordinates": { "lat": 6.5774, "lng": 3.3212 },
+    "nearby": []
+  },
+  {
+    "iata": "CMN",
+    "name": "Casablanca Mohammed V",
+    "city": "Casablanca",
+    "country": "MA",
+    "coordinates": { "lat": 33.3675, "lng": -7.5900 },
+    "nearby": []
+  },
+  {
+    "iata": "ADD",
+    "name": "Addis Ababa Bole",
+    "city": "Addis Ababa",
+    "country": "ET",
+    "coordinates": { "lat": 8.9779, "lng": 38.7993 },
+    "nearby": []
+  },
+  {
+    "iata": "NRT",
+    "name": "Tokyo Narita",
+    "city": "Tokyo",
+    "country": "JP",
+    "coordinates": { "lat": 35.7719, "lng": 140.3928 },
+    "nearby": [
+      { "iata": "HND", "distance_km": 65, "train": true }
+    ]
+  },
+  {
+    "iata": "HND",
+    "name": "Tokyo Haneda",
+    "city": "Tokyo",
+    "country": "JP",
+    "coordinates": { "lat": 35.5494, "lng": 139.7798 },
+    "nearby": [
+      { "iata": "NRT", "distance_km": 65, "train": true }
+    ]
+  },
+  {
+    "iata": "ICN",
+    "name": "Seoul Incheon",
+    "city": "Seoul",
+    "country": "KR",
+    "coordinates": { "lat": 37.4602, "lng": 126.4407 },
+    "nearby": []
+  },
+  {
+    "iata": "BKK",
+    "name": "Bangkok Suvarnabhumi",
+    "city": "Bangkok",
+    "country": "TH",
+    "coordinates": { "lat": 13.6900, "lng": 100.7501 },
+    "nearby": []
+  },
+  {
+    "iata": "SIN",
+    "name": "Singapore Changi",
+    "city": "Singapore",
+    "country": "SG",
+    "coordinates": { "lat": 1.3644, "lng": 103.9915 },
+    "nearby": []
+  },
+  {
+    "iata": "KUL",
+    "name": "Kuala Lumpur International",
+    "city": "Kuala Lumpur",
+    "country": "MY",
+    "coordinates": { "lat": 2.7456, "lng": 101.7099 },
+    "nearby": []
+  },
+  {
+    "iata": "CGK",
+    "name": "Jakarta Soekarno-Hatta",
+    "city": "Jakarta",
+    "country": "ID",
+    "coordinates": { "lat": -6.1256, "lng": 106.6559 },
+    "nearby": []
+  },
+  {
+    "iata": "MNL",
+    "name": "Manila Ninoy Aquino",
+    "city": "Manila",
+    "country": "PH",
+    "coordinates": { "lat": 14.5086, "lng": 121.0194 },
+    "nearby": []
+  },
+  {
+    "iata": "HAN",
+    "name": "Hanoi Noi Bai",
+    "city": "Hanoi",
+    "country": "VN",
+    "coordinates": { "lat": 21.2212, "lng": 105.8072 },
+    "nearby": []
+  },
+  {
+    "iata": "SGN",
+    "name": "Ho Chi Minh City Tan Son Nhat",
+    "city": "Ho Chi Minh City",
+    "country": "VN",
+    "coordinates": { "lat": 10.8188, "lng": 106.6520 },
+    "nearby": []
+  },
+  {
+    "iata": "DEL",
+    "name": "New Delhi Indira Gandhi",
+    "city": "New Delhi",
+    "country": "IN",
+    "coordinates": { "lat": 28.5562, "lng": 77.1000 },
+    "nearby": []
+  },
+  {
+    "iata": "BOM",
+    "name": "Mumbai Chhatrapati Shivaji",
+    "city": "Mumbai",
+    "country": "IN",
+    "coordinates": { "lat": 19.0896, "lng": 72.8656 },
+    "nearby": []
+  },
+  {
+    "iata": "HKG",
+    "name": "Hong Kong International",
+    "city": "Hong Kong",
+    "country": "HK",
+    "coordinates": { "lat": 22.3080, "lng": 113.9185 },
+    "nearby": []
+  },
+  {
+    "iata": "TPE",
+    "name": "Taipei Taoyuan",
+    "city": "Taipei",
+    "country": "TW",
+    "coordinates": { "lat": 25.0777, "lng": 121.2328 },
+    "nearby": []
+  },
+  {
+    "iata": "SYD",
+    "name": "Sydney Kingsford Smith",
+    "city": "Sydney",
+    "country": "AU",
+    "coordinates": { "lat": -33.9399, "lng": 151.1753 },
+    "nearby": []
+  },
+  {
+    "iata": "MEL",
+    "name": "Melbourne",
+    "city": "Melbourne",
+    "country": "AU",
+    "coordinates": { "lat": -37.6690, "lng": 144.8410 },
+    "nearby": []
+  },
+  {
+    "iata": "AKL",
+    "name": "Auckland",
+    "city": "Auckland",
+    "country": "NZ",
+    "coordinates": { "lat": -37.0082, "lng": 174.7850 },
+    "nearby": []
+  },
+  {
+    "iata": "WLG",
+    "name": "Wellington",
+    "city": "Wellington",
+    "country": "NZ",
+    "coordinates": { "lat": -41.3272, "lng": 174.8050 },
+    "nearby": []
+  },
+  {
+    "iata": "LAX",
+    "name": "Los Angeles International",
+    "city": "Los Angeles",
+    "country": "US",
+    "coordinates": { "lat": 33.9416, "lng": -118.4085 },
+    "nearby": []
+  },
+  {
+    "iata": "SFO",
+    "name": "San Francisco International",
+    "city": "San Francisco",
+    "country": "US",
+    "coordinates": { "lat": 37.6213, "lng": -122.3790 },
+    "nearby": []
+  },
+  {
+    "iata": "IAD",
+    "name": "Washington Dulles",
+    "city": "Washington",
+    "country": "US",
+    "coordinates": { "lat": 38.9531, "lng": -77.4565 },
+    "nearby": []
+  },
+  {
+    "iata": "YYZ",
+    "name": "Toronto Pearson",
+    "city": "Toronto",
+    "country": "CA",
+    "coordinates": { "lat": 43.6777, "lng": -79.6248 },
+    "nearby": []
+  },
+  {
+    "iata": "YOW",
+    "name": "Ottawa Macdonald-Cartier",
+    "city": "Ottawa",
+    "country": "CA",
+    "coordinates": { "lat": 45.3225, "lng": -75.6692 },
+    "nearby": []
+  },
+  {
+    "iata": "MEX",
+    "name": "Mexico City International",
+    "city": "Mexico City",
+    "country": "MX",
+    "coordinates": { "lat": 19.4363, "lng": -99.0721 },
+    "nearby": []
+  },
+  {
+    "iata": "BOG",
+    "name": "Bogota El Dorado",
+    "city": "Bogota",
+    "country": "CO",
+    "coordinates": { "lat": 4.7016, "lng": -74.1469 },
+    "nearby": []
+  },
+  {
+    "iata": "LIM",
+    "name": "Lima Jorge Chavez",
+    "city": "Lima",
+    "country": "PE",
+    "coordinates": { "lat": -12.0219, "lng": -77.1143 },
+    "nearby": []
+  },
+  {
+    "iata": "SCL",
+    "name": "Santiago Arturo Merino Benitez",
+    "city": "Santiago",
+    "country": "CL",
+    "coordinates": { "lat": -33.3930, "lng": -70.7858 },
+    "nearby": []
+  },
+  {
+    "iata": "EZE",
+    "name": "Buenos Aires Ezeiza",
+    "city": "Buenos Aires",
+    "country": "AR",
+    "coordinates": { "lat": -34.8222, "lng": -58.5358 },
+    "nearby": []
+  },
+  {
+    "iata": "GRU",
+    "name": "Sao Paulo Guarulhos",
+    "city": "Sao Paulo",
+    "country": "BR",
+    "coordinates": { "lat": -23.4356, "lng": -46.4731 },
+    "nearby": []
+  },
+  {
+    "iata": "BSB",
+    "name": "Brasilia International",
+    "city": "Brasilia",
+    "country": "BR",
+    "coordinates": { "lat": -15.8697, "lng": -47.9208 },
+    "nearby": []
+  },
+  {
+    "iata": "CCS",
+    "name": "Caracas Maiquetia",
+    "city": "Caracas",
+    "country": "VE",
+    "coordinates": { "lat": 10.6031, "lng": -66.9906 },
+    "nearby": []
   }
 ]

@@ -11,6 +11,7 @@ from pyravendb.commands.commands_data import PutDocumentCommand
 from pyravendb.raven_operations.server_operations import CreateDatabaseOperation
 
 from src.db.client import get_store
+from src.db.expiration import ensure_expiration_enabled
 from src.db.models import (
     AirportDocument,
     Coordinates,
@@ -56,6 +57,8 @@ def ensure_database(store) -> None:
             pass
         else:
             raise
+
+    ensure_expiration_enabled(store)
 
 
 def seed_airports(store) -> int:

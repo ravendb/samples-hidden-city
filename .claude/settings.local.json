@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "PowerShell($content = Get-Content \"c:\\\\Users\\\\weronika.kolodziej\\\\samples-hidden-city\\\\src\\\\agent\\\\loop.py\" -Raw -Encoding UTF8; $bytes = [System.Text.Encoding]::UTF8.GetBytes\\($content[-100..-1] -join ''\\); Write-Host \\($bytes | ForEach-Object { $_.ToString\\(\"X2\"\\) } | Select-Object -Last 50\\) -Separator \" \")"
+      "PowerShell($content = Get-Content \"c:\\\\Users\\\\weronika.kolodziej\\\\samples-hidden-city\\\\src\\\\agent\\\\loop.py\" -Raw -Encoding UTF8; $bytes = [System.Text.Encoding]::UTF8.GetBytes\\($content[-100..-1] -join ''\\); Write-Host \\($bytes | ForEach-Object { $_.ToString\\(\"X2\"\\) } | Select-Object -Last 50\\) -Separator \" \")",
+      "Bash(python -c \"import pyravendb, os; print\\(os.path.dirname\\(pyravendb.__file__\\)\\)\")",
+      "Bash(pip show *)"
     ]
   }
 }

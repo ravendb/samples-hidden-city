@@ -66,6 +66,25 @@ class ActiveConstraints(BaseModel):
     preferred_airlines: list[str] = Field(default_factory=list)
 
 
+class UserProfile(BaseModel):
+    user_id: str
+    name: Optional[str] = None
+    carry_on_only: Optional[bool] = None
+    max_stops: Optional[int] = None
+    home_airport: Optional[str] = None
+    departure_airports: list[str] = Field(default_factory=list)
+    countries_of_interest: list[str] = Field(default_factory=list)
+    destinations: list[str] = Field(default_factory=list)
+    preferred_airlines: list[str] = Field(default_factory=list)
+    loyalty_programs: list[str] = Field(default_factory=list)
+    budget_max: Optional[float] = None
+    budget_currency: Optional[str] = None
+    last_updated: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    def profile_id(self) -> str:
+        return f"users/{self.user_id}"
+
+
 class ConversationTurn(BaseModel):
     role: str  # "user" | "assistant"
     content: str
