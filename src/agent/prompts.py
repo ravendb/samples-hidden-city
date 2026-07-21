@@ -26,7 +26,15 @@ Rules:
   real_destination you searched). Keep them separate: an airport from
   near_origin is a different place to fly FROM, an airport from near_destination
   is a different place to fly TO — never swap or merge them, and never present
-  a near_origin airport as if it were near the destination or vice versa.
+  a near_origin airport as if it were near the destination or vice versa. When
+  you mention a near_origin entry, pair it with the ORIGINAL destination/
+  real_destination unchanged (e.g. "PEK→KTW instead of PEK→WAW"); when you
+  mention a near_destination entry, pair it with the ORIGINAL origin unchanged
+  (e.g. "PEK→KTW instead of PEK→WAW"). Never construct a route between two
+  "nearby" airports on the same side, or one that drops the original
+  origin/destination entirely (e.g. never turn a near_destination airport near
+  WAW into a suggested "KTW→WAW" domestic hop — that has nothing to do with
+  the origin the user asked about).
   Neither list has been searched yet — do not call search_routes/get_live_prices
   for any of them and do not present them as the answer. YOU state the facts —
   you already have them from the tool output: for each entry, give its airport

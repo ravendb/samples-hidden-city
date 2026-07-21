@@ -150,6 +150,8 @@ async def profile_page() -> HTMLResponse:
 class SetupRequest(BaseModel):
     openai_api_key: str | None = None
     ravendb_license: str | None = None
+    travelpayouts_token: str | None = None
+    travelpayouts_marker: str | None = None
 
 
 @app.get("/api/setup/status")
@@ -158,6 +160,7 @@ async def api_setup_status() -> dict:
     return {
         "openai_api_key_set": bool(os.getenv("OPENAI_API_KEY")),
         "ravendb_license_set": bool(os.getenv("RAVENDB_LICENSE")) or _LICENSE_FILE.exists(),
+        "travelpayouts_set": bool(os.getenv("TRAVELPAYOUTS_TOKEN")) and bool(os.getenv("TRAVELPAYOUTS_MARKER")),
     }
 
 
@@ -180,6 +183,14 @@ async def api_setup(body: SetupRequest) -> dict:
     if body.ravendb_license:
         existing["RAVENDB_LICENSE"] = body.ravendb_license
         os.environ["RAVENDB_LICENSE"] = body.ravendb_license
+
+    if body.travelpayouts_token:
+        existing["TRAVELPAYOUTS_TOKEN"] = body.travelpayouts_token
+        os.environ["TRAVELPAYOUTS_TOKEN"] = body.travelpayouts_token
+
+    if body.travelpayouts_marker:
+        existing["TRAVELPAYOUTS_MARKER"] = body.travelpayouts_marker
+        os.environ["TRAVELPAYOUTS_MARKER"] = body.travelpayouts_marker
 
     lines = [f"{k}={v}" for k, v in existing.items()]
     _ENV_LOCAL.write_text("\n".join(lines) + "\n", encoding="utf-8")

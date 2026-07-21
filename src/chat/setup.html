@@ -175,16 +175,17 @@ html, body {
     <div class="dot active" id="dot-0"></div>
     <div class="dot" id="dot-1"></div>
     <div class="dot" id="dot-2"></div>
+    <div class="dot" id="dot-3"></div>
   </div>
 
   <!-- ─── Step 0: Welcome ─── -->
   <div class="step active" id="step-0">
     <div class="step-header">
-      <span class="step-eyebrow">Step 1 of 3</span>
+      <span class="step-eyebrow">Step 1 of 4</span>
       <h1 class="step-title">Welcome to the demo</h1>
       <p class="step-desc">
-        This wizard takes 2 minutes. You'll need an <strong>OpenAI API key</strong>
-        and a free <strong>RavenDB license</strong>.
+        This wizard takes 2 minutes. You'll need an <strong>OpenAI API key</strong>,
+        a free <strong>RavenDB license</strong>, and your <strong>Travelpayouts</strong> credentials.
       </p>
     </div>
 
@@ -207,7 +208,7 @@ html, body {
   <!-- ─── Step 1: OpenAI API key ─── -->
   <div class="step" id="step-1">
     <div class="step-header">
-      <span class="step-eyebrow">Step 2 of 3</span>
+      <span class="step-eyebrow">Step 2 of 4</span>
       <h1 class="step-title">OpenAI API key</h1>
       <p class="step-desc">
         Used to call <code style="background:var(--surface2);padding:1px 5px;border-radius:4px">gpt-4o-mini</code>.
@@ -265,7 +266,7 @@ html, body {
   <!-- ─── Step 2: RavenDB license ─── -->
   <div class="step" id="step-2">
     <div class="step-header">
-      <span class="step-eyebrow">Step 3 of 3</span>
+      <span class="step-eyebrow">Step 3 of 4</span>
       <h1 class="step-title">RavenDB license</h1>
       <p class="step-desc">
         A free Community license is enough for this demo.
@@ -304,11 +305,84 @@ html, body {
 
     <div class="btn-row">
       <button class="btn btn-primary pulse" id="btn-2" onclick="submitStep2()">
-        <span class="btn-text">Finish setup →</span>
+        <span class="btn-text">Next →</span>
         <div class="spinner"></div>
       </button>
       <button class="btn btn-ghost" onclick="skipLicense()">Skip</button>
       <button class="btn-back" onclick="goTo(1)">← Back</button>
+    </div>
+  </div>
+
+  <!-- ─── Step 3: Travelpayouts credentials ─── -->
+  <div class="step" id="step-3">
+    <div class="step-header">
+      <span class="step-eyebrow">Step 4 of 4</span>
+      <h1 class="step-title">Travelpayouts credentials</h1>
+      <p class="step-desc">
+        Used for live price lookups on a cache miss and the 6-hour bulk price ingest.
+        If you already have these set in your environment, you can skip this step.
+      </p>
+    </div>
+
+    <div class="info-box" id="travelpayouts-status" style="display:none">
+      <span class="info-icon">✅</span>
+      <span>
+        <code>TRAVELPAYOUTS_TOKEN</code> and <code>TRAVELPAYOUTS_MARKER</code> are already
+        configured in your environment. Click <strong>Skip</strong> to continue, or enter
+        new values below to replace them.
+      </span>
+    </div>
+
+    <div class="field">
+      <label style="display:flex;align-items:center;gap:6px">
+        API token
+        <span class="tooltip-wrap">
+          <span class="tooltip-trigger" onclick="this.parentElement.classList.toggle('open')">?</span>
+          <span class="tooltip-bubble">
+            Get your token at <strong>travelpayouts.com → API access</strong>.
+            Stored locally in <code>.env.local</code> and never sent to a third party.
+          </span>
+        </span>
+      </label>
+      <input type="password" id="travelpayouts-token" placeholder="API token…"
+        oninput="validateTravelpayouts()" autocomplete="off" />
+      <span class="field-hint">
+        Don't have one? <a href="https://www.travelpayouts.com/programs/100/tools/api" target="_blank" rel="noreferrer">Get one at travelpayouts.com →</a>
+      </span>
+    </div>
+
+    <div class="field">
+      <label style="display:flex;align-items:center;gap:6px">
+        Account ID (marker)
+        <span class="tooltip-wrap">
+          <span class="tooltip-trigger" onclick="this.parentElement.classList.toggle('open')">?</span>
+          <span class="tooltip-bubble">
+            Your Travelpayouts affiliate marker/partner ID, shown on your account
+            dashboard. Sent with every price request to attribute it to your account.
+          </span>
+        </span>
+      </label>
+      <input type="text" id="travelpayouts-marker" placeholder="e.g. 123456"
+        oninput="validateTravelpayouts()" autocomplete="off" />
+    </div>
+
+    <div class="info-box">
+      <span class="info-icon">🔒</span>
+      <span>
+        Both values are saved to <code>.env.local</code> in the project root.
+        It is <strong>never committed</strong> — <code>.env.local</code> is in <code>.gitignore</code>.
+      </span>
+    </div>
+
+    <div id="error-3" class="error-msg"></div>
+
+    <div class="btn-row">
+      <button class="btn btn-primary pulse" id="btn-3" onclick="submitStep3()">
+        <span class="btn-text">Finish setup →</span>
+        <div class="spinner"></div>
+      </button>
+      <button class="btn btn-ghost" id="skip-travelpayouts-btn" onclick="skipTravelpayouts()">Skip</button>
+      <button class="btn-back" onclick="goTo(2)">← Back</button>
     </div>
   </div>
 
@@ -370,9 +444,29 @@ async function checkSetupStatus() {
     if (data.ravendb_license_set) {
       document.getElementById('license-skip-info').style.display = 'flex';
     }
+    if (data.travelpayouts_set) {
+      document.getElementById('travelpayouts-status').style.display = 'flex';
+    }
   } catch (_) {}
 }
 checkSetupStatus();
+
+function validateTravelpayouts() {
+  const token = document.getElementById('travelpayouts-token').value.trim();
+  const marker = document.getElementById('travelpayouts-marker').value.trim();
+  const tokenInput = document.getElementById('travelpayouts-token');
+  const markerInput = document.getElementById('travelpayouts-marker');
+
+  tokenInput.classList.remove('valid', 'invalid');
+  if (token.length > 0) tokenInput.classList.add(token.length > 10 ? 'valid' : 'invalid');
+
+  markerInput.classList.remove('valid', 'invalid');
+  if (marker.length > 0) markerInput.classList.add('valid');
+
+  const btn = document.getElementById('btn-3');
+  if (token.length > 10 && marker.length > 0) btn.classList.add('pulse');
+  else btn.classList.remove('pulse');
+}
 
 function validateLicense(input) {
   const v = input.value.trim();
@@ -446,7 +540,7 @@ async function submitStep2() {
       showError(2, data.detail || `Error ${res.status}`);
       return;
     }
-    showSuccess();
+    goTo(3);
   } catch (err) {
     showError(2, String(err));
   } finally {
@@ -455,7 +549,7 @@ async function submitStep2() {
 }
 
 async function skipLicense() {
-  // POST with no license — just mark setup done
+  // POST with no license — just move to the next step
   try {
     await fetch('/api/setup', {
       method: 'POST',
@@ -463,12 +557,44 @@ async function skipLicense() {
       body: JSON.stringify({ ravendb_license: null }),
     });
   } catch (_) {}
+  goTo(3);
+}
+
+async function submitStep3() {
+  clearError(3);
+  const token = document.getElementById('travelpayouts-token').value.trim();
+  const marker = document.getElementById('travelpayouts-marker').value.trim();
+
+  setLoading('btn-3', true);
+  try {
+    const res = await fetch('/api/setup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        travelpayouts_token: token || null,
+        travelpayouts_marker: marker || null,
+      }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      showError(3, data.detail || `Error ${res.status}`);
+      return;
+    }
+    showSuccess();
+  } catch (err) {
+    showError(3, String(err));
+  } finally {
+    setLoading('btn-3', false);
+  }
+}
+
+async function skipTravelpayouts() {
   showSuccess();
 }
 
 function showSuccess() {
   document.getElementById('step-' + currentStep).classList.remove('active');
-  ['dot-0','dot-1','dot-2'].forEach(id => {
+  ['dot-0','dot-1','dot-2','dot-3'].forEach(id => {
     document.getElementById(id).classList.remove('active');
     document.getElementById(id).classList.add('done');
   });
