@@ -238,10 +238,15 @@ covers the full cluster deployment.
 | **uv** | latest | required | required | see below |
 | **Docker** | 24+ | required | — | [docs.docker.com](https://docs.docker.com/get-docker/) |
 | **Docker Compose** | v2 (bundled with Docker Desktop) | required | — | bundled with Docker Desktop |
-| **kubectl** | 1.28+ | — | required | [kubernetes.io](https://kubernetes.io/docs/tasks/tools/) |
-| **helm** | 3.x | — | required | `winget install Helm.Helm` |
-| **kind** | latest | — | required (local) | `winget install Kubernetes.kind` |
+| **kubectl** | 1.28+ | — | auto-installed | [kubernetes.io](https://kubernetes.io/docs/tasks/tools/) |
+| **helm** | 3.x | — | auto-installed | `winget install Helm.Helm` |
+| **kind** | latest | — | auto-installed (local) | `winget install Kubernetes.kind` |
 | **Kubernetes cluster** | 1.28+ | — | required | kind (local, see below) / cloud provider |
+
+"Auto-installed" means `start-k8s.ps1` installs it for you via `winget` if it's
+missing — see [What you'll end up with installed](#what-youll-end-up-with-installed)
+below for the full list of what the Kubernetes flow puts on your machine and in
+your cluster, and what you still have to do by hand.
 
 cert-manager and ingress-nginx are prerequisites of the RavenDB Operator
 (https://github.com/ravendb/ravendb-operator) — `start-k8s.ps1` / `k8s/operator/install.sh`
@@ -330,6 +335,49 @@ Or skip the prompt with `-Mode Local` / `-Mode K8s`. `-Mode K8s` hands off to
 `start-k8s.ps1` automatically (see [Kubernetes (local — kind)](#kubernetes-local--kind)
 below) — everything described there runs without any further manual steps,
 except the RavenDB cert/license secrets noted in that section.
+
+### What you'll end up with installed
+
+**Local mode** installs nothing beyond what's already in
+[Prerequisites](#prerequisites) — Python, uv, Docker/Compose.
+
+**Kubernetes mode** (`.\start.ps1 -Mode K8s` / `start-k8s.ps1`) installs a lot
+more, all of it automatic except two items. Know this before you run it:
+
+**On your machine, via `winget`, only if not already present:**
+- `kind`
+- `kubectl`
+- `helm`
+- Docker Desktop — special-cased, see below
+
+**Inside the kind cluster, via `kubectl apply` / `helm install`, fully automatic:**
+- cert-manager (namespace `cert-manager`) — TLS prerequisite of the RavenDB Operator
+- ingress-nginx, kind provider (namespace `ingress-nginx`)
+- RavenDB Kubernetes Operator, Helm release `ravendb-operator` (namespace `ravendb-operator-system`) — https://github.com/ravendb/ravendb-operator
+- Its CRD, `ravendbclusters.ravendb.ravendb.io`
+- The RavenDB cluster itself, Helm release `ravendb-cluster`, 3 nodes (namespace `hidden-city`)
+- The agent, worker, and scraper CronJob (namespace `hidden-city`)
+
+**The two things that stay manual, on purpose:**
+1. **Docker Desktop's first launch.** winget can install the app, but not
+   click through its setup (license, WSL2/Hyper-V backend choice, possible
+   reboot). If Docker isn't found, the script installs it and stops — start
+   Docker Desktop yourself, wait for "Docker Desktop is running", then re-run.
+2. **RavenDB's TLS/license secrets** (`ravendb-license`, `ravendb-cert`,
+   `ravendb-ca-cert`, `ravendb-client-cert`). These need to come from RavenDB's
+   own Setup Wizard / setup package — a generated openssl cert isn't
+   trustworthy here, so the script won't fabricate one. It checks for all four
+   secrets up front and stops with the exact `kubectl create secret` commands
+   if any are missing (details in
+   [Kubernetes (local — kind)](#kubernetes-local--kind) below).
+
+Your OpenAI API key is the one thing the script *does* ask for interactively
+(once) — it's written to `k8s/secrets.local.yaml`, which is git-ignored.
+
+Nothing here modifies your default `kubectl` context beyond switching to
+`kind-hidden-city`. `.\start.ps1 -DeleteCluster` removes the kind cluster; the
+winget-installed CLI tools and Docker Desktop are left on your machine
+(`winget uninstall <id>` if you don't want to keep them).
 
 ### Local (docker-compose)
 
@@ -439,13 +487,12 @@ Flags (forwarded from `start.ps1 -Mode K8s`, or pass directly to `start-k8s.ps1`
 Press **Ctrl+C** to stop port-forwards. The cluster keeps running — subsequent
 runs with `-SkipBuild -SkipOperator` are fast (manifests reapplied, no rebuild).
 
-**Prerequisites for kind:**
-```powershell
-winget install Kubernetes.kind
-winget install Kubernetes.kubectl
-winget install Helm.Helm
-```
-Docker Desktop must be running.
+**Prerequisites for kind:** none you need to install by hand — `kind`,
+`kubectl`, and `helm` are installed automatically via `winget` on first run if
+missing. Docker Desktop is the one exception (see
+[What you'll end up with installed](#what-youll-end-up-with-installed) above);
+if it's missing the script installs it, then asks you to launch it manually
+and re-run.
 
 #### Show the operator in action
 

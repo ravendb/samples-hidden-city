@@ -19,9 +19,7 @@ import asyncio
 import logging
 import os
 
-from pyravendb.commands.commands_data import PutDocumentCommand
-
-from src.db.client import doc_to_dict, get_store
+from src.db.client import doc_to_dict, get_store, put_document
 from src.db.expiration import ensure_expiration_enabled, expires_at
 from src.db.models import RouteDocument
 from src.hidden_city.enricher import enrich_hidden_city
@@ -37,7 +35,7 @@ def get_origins(store) -> list[str]:
     """Distinct departure airports across all saved user profiles, or the fallback list if none exist yet."""
     origins: set[str] = set()
     with store.open_session() as session:
-        users = [doc_to_dict(u) for u in session.query(collection_name="Users").take(10_000)]
+        users = [doc_to_dict(u) for u in session.query_collection("Users").take(10_000)]
 
     for user in users:
         home_airport = user.get("home_airport")
@@ -99,11 +97,10 @@ async def run() -> None:
         enriched = enrich_hidden_city(routes)
         hidden = sum(1 for r in enriched if r.hidden_city_score > 0.5)
 
-        executor = store.get_request_executor()
         for route in enriched:
             data = route.model_dump(mode="json")
             data["@metadata"] = {"@collection": "Routes", "@expires": expires_at()}
-            executor.execute(PutDocumentCommand(key=route.route_id(), document=data))
+            put_document(store, route.route_id(), data)
 
         total_written += len(enriched)
         print(f"  Travelpayouts → {origin}: {len(enriched)} routes ({hidden} hidden city)", flush=True)

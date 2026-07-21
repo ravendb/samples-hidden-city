@@ -137,9 +137,7 @@ def _write_to_ravendb(
         store = get_store()
         data = route.model_dump(mode="json")
         data["@metadata"] = {"@collection": "Routes", "@expires": expires_at()}
-        store.get_request_executor().execute(
-            PutDocumentCommand(key=route.route_id(), document=data)
-        )
+        put_document(store, route.route_id(), data)
         log.info("Cached live price for %s→%s: $%s", origin, destination, price)
     except Exception:
         log.exception("Failed to cache price for %s→%s — continuing", origin, destination)

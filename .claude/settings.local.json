@@ -7,7 +7,15 @@
       "Bash(python -m py_compile src/agent/loop.py src/agent/app.py)",
       "WebSearch",
       "Bash(python -c \"import ast; ast.parse\\(open\\('src/scraper/travelpayouts.py', encoding='utf-8'\\).read\\(\\)\\); ast.parse\\(open\\('src/scraper/run.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
-      "mcp__claude_ai_Context7__resolve-library-id"
+      "mcp__claude_ai_Context7__resolve-library-id",
+      "Bash(grep -n \"^#\\\\{2,3\\\\} \" \"c:/Users/weronika.kolodziej/samples-hidden-city/README.md\")",
+      "Bash(curl -sf http://127.0.0.1:8000/health)",
+      "Bash(break)",
+      "Bash(curl -s http://127.0.0.1:8000/health)",
+      "Bash(python -c ' *)",
+      "Bash(curl -s http://127.0.0.1:8000/metrics)",
+      "Bash(curl -s -o /dev/null -w \"http_code=%{http_code} errno=%{exitcode}\\\\n\" http://127.0.0.1:8000/health)",
+      "Bash(curl http://127.0.0.1:8000/health)"
     ]
   }
 }

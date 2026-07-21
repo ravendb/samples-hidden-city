@@ -35,17 +35,30 @@ class TestIsStale:
 
 
 class TestSearchRoutes:
-    def _mock_session_with_routes(self, routes: list[dict]):
-        mock_query = MagicMock()
-        mock_query.where_equals.return_value = mock_query
-        mock_query.where_greater_than.return_value = mock_query
-        mock_query.take.return_value = mock_query
-        mock_query.__iter__ = MagicMock(side_effect=lambda: iter(routes))
+    def _mock_session_with_routes(self, routes: list[dict], airport_candidates: list[dict] | None = None):
+        """Routes queries (used by the main search + hub-join) and Airports queries
+        (used by the vector-search nearby lookup) get separate mock query objects,
+        routed by collection name — mirroring how session.query_collection() is
+        actually called with different collections for each purpose."""
+        routes_query = MagicMock()
+        routes_query.where_equals.return_value = routes_query
+        routes_query.where_greater_than.return_value = routes_query
+        routes_query.take.return_value = routes_query
+        routes_query.__iter__ = MagicMock(side_effect=lambda: iter(routes))
+
+        airports_query = MagicMock()
+        airports_query.where_not_equals.return_value = airports_query
+        airports_query.vector_search.return_value = airports_query
+        airports_query.__iter__ = MagicMock(side_effect=lambda: iter(airport_candidates or []))
+
+        def query_collection(name, *args, **kwargs):
+            return airports_query if name == "Airports" else routes_query
 
         mock_session = MagicMock()
         mock_session.__enter__ = MagicMock(return_value=mock_session)
         mock_session.__exit__ = MagicMock(return_value=False)
-        mock_session.query.return_value = mock_query
+        mock_session.query_collection = MagicMock(side_effect=query_collection)
+        mock_session.load.return_value = None  # no airport/route doc exists unless overridden
 
         mock_store = MagicMock()
         mock_store.open_session.return_value = mock_session
@@ -87,32 +100,119 @@ class TestSearchRoutes:
 
     @pytest.mark.asyncio
     async def test_empty_results_surfaces_nearby_alternative(self):
-        """No KRK routes are seeded, but KRK's airport doc lists WAW as nearby (290km,
-        train available) — the tool should surface it under near_origin (KRK is the
-        origin here) for the agent to ask about, never auto-substitute it into the
-        results. LHR (the destination) has no nearby doc configured in this test, so
-        near_destination stays empty — confirming the two sides are kept separate."""
-        mock_store = self._mock_session_with_routes([])
+        """No KRK->LHR route exists and no origin->hub->destination connection exists
+        either, so the tool falls back to the vector-search nearby lookup. KRK's
+        airport doc carries a location_vector/coordinates, and the mocked vector
+        search returns WAW as a candidate — surfaced under near_origin (KRK is the
+        origin here) for the agent to ask about, never auto-substituted into the
+        results. LHR (the destination) has no airport doc configured in this test,
+        so near_destination stays empty — confirming the two sides are kept separate."""
+        mock_store = self._mock_session_with_routes(
+            [],
+            airport_candidates=[
+                {"iata": "WAW", "city": "Warsaw", "country": "PL", "coordinates": {"lat": 52.1657, "lng": 20.9671}}
+            ],
+        )
+        krk_doc = {
+            "iata": "KRK",
+            "coordinates": {"lat": 50.0777, "lng": 19.7848},
+            "location_vector": [0.6, 0.2, 0.77],
+        }
         mock_store.open_session.return_value.load.side_effect = lambda key: (
-            {"nearby": [{"iata": "WAW", "distance_km": 290, "train": True}]}
-            if key == "airports/KRK"
-            else None
+            krk_doc if key == "airports/KRK" else None
         )
 
-        with (
-            patch("src.tools.search_routes.get_store", return_value=mock_store),
-            patch(
-                "src.tools.search_routes.load_airport_names",
-                return_value={"WAW": {"city": "Warsaw"}},
-            ),
-        ):
+        with patch("src.tools.search_routes.get_store", return_value=mock_store):
             result = await search_routes(origin="KRK", destination="LHR")
 
         assert result["count"] == 0
-        assert result["nearby_alternatives"]["near_origin"] == [
-            {"airport": "WAW", "distance_km": 290, "train": True, "city": "Warsaw"}
-        ]
+        near_origin = result["nearby_alternatives"]["near_origin"]
+        assert len(near_origin) == 1
+        assert near_origin[0]["airport"] == "WAW"
+        assert near_origin[0]["city"] == "Warsaw"
+        assert near_origin[0]["country"] == "PL"
+        assert near_origin[0]["distance_km"] > 0
+        assert "train" not in near_origin[0]
         assert result["nearby_alternatives"]["near_destination"] == []
+
+    @pytest.mark.asyncio
+    async def test_nearby_alternative_excludes_origin_airport(self):
+        """The vector search query must exclude the origin airport from its own
+        candidate list."""
+        mock_store = self._mock_session_with_routes([], airport_candidates=[])
+        krk_doc = {
+            "iata": "KRK",
+            "coordinates": {"lat": 50.0777, "lng": 19.7848},
+            "location_vector": [0.6, 0.2, 0.77],
+        }
+        mock_store.open_session.return_value.load.side_effect = lambda key: (
+            krk_doc if key == "airports/KRK" else None
+        )
+
+        with patch("src.tools.search_routes.get_store", return_value=mock_store):
+            await search_routes(origin="KRK", destination="LHR")
+
+        airports_query = mock_store.open_session.return_value.query_collection("Airports")
+        airports_query.where_not_equals.assert_any_call("iata", "KRK")
+
+    @pytest.mark.asyncio
+    async def test_connecting_hub_surfaces_when_no_direct_route(self):
+        """origin->hub and hub->destination both exist as cached routes, but no
+        direct origin->destination route does — the tool should stitch them into a
+        connecting_hubs suggestion instead of falling back to nearby airports."""
+        routes = [
+            {"origin": "AAA", "destination": "HUB", "typical_price": {"min": 100.0}},
+            {"origin": "HUB", "destination": "BBB", "typical_price": {"min": 80.0}},
+        ]
+        mock_store = self._mock_session_with_routes(routes)
+        leg_docs = {
+            "routes/AAA-HUB": {
+                "typical_price": {"min": 100.0, "max": 150.0},
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+            },
+            "routes/HUB-BBB": {
+                "typical_price": {"min": 80.0, "max": 120.0},
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+            },
+        }
+        mock_store.open_session.return_value.load.side_effect = lambda key: leg_docs.get(key)
+
+        with patch("src.tools.search_routes.load_airport_names", return_value={}):
+            with patch("src.tools.search_routes.get_store", return_value=mock_store):
+                result = await search_routes(origin="AAA", destination="BBB")
+
+        assert result["count"] == 0
+        assert "connecting_hubs" in result
+        assert "nearby_alternatives" not in result
+        assert result["connecting_hubs"][0]["via"] == "HUB"
+        assert result["connecting_hubs"][0]["total_price_usd_min"] == pytest.approx(180.0)
+
+    @pytest.mark.asyncio
+    async def test_connecting_hub_empty_falls_back_to_nearby(self):
+        """No origin->X->destination hub exists (the mocked Routes query returns the
+        same empty list for both sides) — falls through to the vector-search nearby
+        lookup, same as the no-hub-and-no-nearby-data case, but here with real
+        candidate data configured so nearby_alternatives is actually populated."""
+        mock_store = self._mock_session_with_routes(
+            [],
+            airport_candidates=[
+                {"iata": "WAW", "city": "Warsaw", "country": "PL", "coordinates": {"lat": 52.1657, "lng": 20.9671}}
+            ],
+        )
+        krk_doc = {
+            "iata": "KRK",
+            "coordinates": {"lat": 50.0777, "lng": 19.7848},
+            "location_vector": [0.6, 0.2, 0.77],
+        }
+        mock_store.open_session.return_value.load.side_effect = lambda key: (
+            krk_doc if key == "airports/KRK" else None
+        )
+
+        with patch("src.tools.search_routes.get_store", return_value=mock_store):
+            result = await search_routes(origin="KRK", destination="LHR")
+
+        assert "connecting_hubs" not in result
+        assert "nearby_alternatives" in result
 
     @pytest.mark.asyncio
     async def test_carry_on_lowers_hidden_city_score(self):

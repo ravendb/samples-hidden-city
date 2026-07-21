@@ -2,7 +2,9 @@ import os
 
 import httpx
 import pytest
-from pyravendb.store.document_store import DocumentStore
+from ravendb import CreateDatabaseOperation, DocumentStore
+from ravendb.exceptions.raven_exceptions import ConcurrencyException
+from ravendb.serverwide.database_record import DatabaseRecord
 
 TEST_DB = "hidden-city-test"
 
@@ -32,8 +34,12 @@ def ravendb_store(request, ravendb_url):
 
     store = DocumentStore(urls=[ravendb_url], database=TEST_DB)
     store.initialize()
+    try:
+        store.maintenance.server.send(CreateDatabaseOperation(DatabaseRecord(TEST_DB)))
+    except ConcurrencyException:
+        pass
     yield store
-    store.dispose()
+    store.close()
 
 
 @pytest.fixture

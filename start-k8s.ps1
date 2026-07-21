@@ -6,11 +6,10 @@
 #   .\start-k8s.ps1 -SkipOperator    # skip cert-manager/ingress-nginx/operator install (already installed)
 #   .\start-k8s.ps1 -DeleteCluster   # delete the kind cluster and exit
 #
-# Prerequisites:
-#   kind:    winget install Kubernetes.kind
-#   kubectl: winget install Kubernetes.kubectl
-#   helm:    winget install Helm.Helm
-#   docker:  Docker Desktop running
+# Prerequisites: kind, kubectl, helm are auto-installed via winget if missing.
+# Docker Desktop is also auto-installed via winget, but needs one manual step
+# (first launch: accept the license, finish WSL2/Hyper-V setup, possibly reboot) --
+# the script installs it and asks you to re-run once it's running.
 #
 # TLS certs (license/cert-manager/ingress-nginx/operator are all automated below,
 # but the RavenDB self-signed cert material is NOT auto-generated -- see step 2).
@@ -36,6 +35,85 @@ function Write-Step($n, $total, $msg) {
 function Write-Ok($msg)   { Write-Host "  OK: $msg" -ForegroundColor Green }
 function Write-Warn($msg) { Write-Host "  WARN: $msg" -ForegroundColor Yellow }
 
+# PowerShell 5.1 wraps a native command's stderr lines into terminating
+# NativeCommandError objects whenever that stream is redirected (2>&1, 2>$null,
+# etc.) and $ErrorActionPreference = "Stop" is in effect -- even when the
+# command's own exit code is 0 and the stderr text is purely informational
+# (e.g. "No kind clusters found."). Run any such call through this helper,
+# which drops $ErrorActionPreference to SilentlyContinue in its own function
+# scope only, so the redirect no longer aborts the script. $LASTEXITCODE from
+# the wrapped command is still set normally afterwards.
+function Invoke-Quiet {
+    param([Parameter(Mandatory)][scriptblock]$Command)
+    $ErrorActionPreference = "SilentlyContinue"
+    & $Command
+}
+
+# Look for a value the user already provided somewhere else before asking again:
+# 1. an environment variable in this session
+# 2. the repo-root .env file (the Local/docker-compose flow's env source)
+# 3. an optional plain file, whole contents as the value (e.g. license.json)
+function Find-ExistingValue {
+    param([string]$Name, [string]$FallbackFile = $null)
+
+    $fromEnv = [System.Environment]::GetEnvironmentVariable($Name)
+    if ($fromEnv) { return @{ Value = $fromEnv; Source = "environment variable `$env:$Name" } }
+
+    $dotEnvPath = "$root\.env"
+    if (Test-Path $dotEnvPath) {
+        $line = Get-Content $dotEnvPath | Where-Object { $_ -match "^$Name=(.+)$" } | Select-Object -First 1
+        if ($line -match "^$Name=(.+)$") {
+            $val = $Matches[1].Trim()
+            if ($val) { return @{ Value = $val; Source = ".env" } }
+        }
+    }
+
+    if ($FallbackFile -and (Test-Path "$root\$FallbackFile")) {
+        $val = (Get-Content "$root\$FallbackFile" -Raw).Trim()
+        if ($val) { return @{ Value = $val; Source = $FallbackFile } }
+    }
+
+    return $null
+}
+
+# Fill a "KEY: "REPLACE_ME"" line in the secrets YAML, escaping the value so it
+# stays valid inside a double-quoted YAML string and isn't misread as a regex
+# capture-group reference by -replace.
+function Set-SecretPlaceholder {
+    param([string]$Content, [string]$KeyName, [string]$RawValue)
+    $yamlSafe = ($RawValue -replace '"', '\"') -replace '\$', '$$'
+    return $Content -replace "${KeyName}:\s+`"REPLACE_ME`"", "${KeyName}: `"$yamlSafe`""
+}
+
+function Refresh-Path {
+    # Winget updates the Machine/User PATH env vars, but this already-running
+    # process doesn't see that until we re-read them from the registry.
+    $machine = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
+    $user    = [System.Environment]::GetEnvironmentVariable("Path", "User")
+    $env:Path = "$machine;$user"
+}
+
+function Ensure-CliTool($cmd, $wingetId, $displayName) {
+    if (Get-Command $cmd -ErrorAction SilentlyContinue) { return $true }
+
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Write-Host "  ERROR: '$cmd' not found and winget isn't available to install it." -ForegroundColor Red
+        Write-Host "    Install $displayName manually: winget install -e --id $wingetId" -ForegroundColor Gray
+        return $false
+    }
+
+    Write-Warn "$displayName not found -- installing via winget ($wingetId)..."
+    winget install -e --id $wingetId --accept-package-agreements --accept-source-agreements
+    Refresh-Path
+
+    if (Get-Command $cmd -ErrorAction SilentlyContinue) {
+        Write-Ok "$displayName installed"
+        return $true
+    }
+    Write-Warn "$displayName installed but not visible on PATH in this terminal session yet."
+    return $false
+}
+
 # --- delete cluster shortcut ---
 if ($DeleteCluster) {
     Write-Host "`nDeleting kind cluster '$ClusterName'..." -ForegroundColor Cyan
@@ -44,17 +122,50 @@ if ($DeleteCluster) {
     exit 0
 }
 
-# --- prerequisites ---
+# --- prerequisites (auto-install missing CLI tools via winget) ---
 Write-Host ""
-foreach ($cmd in @("kind", "kubectl", "helm", "docker")) {
-    if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
-        Write-Host "  ERROR: '$cmd' not found. Install it and reopen this terminal:" -ForegroundColor Red
-        Write-Host "    kind:    winget install Kubernetes.kind" -ForegroundColor Gray
-        Write-Host "    kubectl: winget install Kubernetes.kubectl" -ForegroundColor Gray
-        Write-Host "    helm:    winget install Helm.Helm" -ForegroundColor Gray
-        Write-Host "    docker:  Docker Desktop (https://docs.docker.com/desktop/)" -ForegroundColor Gray
-        exit 1
+$cliReady = $true
+foreach ($t in @(
+    @{ Cmd = "kind";    Id = "Kubernetes.kind";    Name = "kind" },
+    @{ Cmd = "kubectl"; Id = "Kubernetes.kubectl"; Name = "kubectl" },
+    @{ Cmd = "helm";    Id = "Helm.Helm";          Name = "helm" }
+)) {
+    if (-not (Ensure-CliTool $t.Cmd $t.Id $t.Name)) { $cliReady = $false }
+}
+
+# Docker Desktop is a heavier install (WSL2/Hyper-V, admin rights, a GUI first-run
+# to accept the license and pick a backend) -- winget can kick it off, but it
+# can't be driven unattended past that point, so we install and stop rather than
+# pretending the rest of the script can continue.
+if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        Write-Warn "docker not found -- installing Docker Desktop via winget..."
+        winget install -e --id Docker.DockerDesktop --accept-package-agreements --accept-source-agreements
+        Write-Host ""
+        Write-Host "  Docker Desktop was installed. It needs one manual step: launch it," -ForegroundColor Yellow
+        Write-Host "  accept the license, let it finish WSL2/Hyper-V setup (may prompt for a" -ForegroundColor Yellow
+        Write-Host "  reboot), and wait for 'Docker Desktop is running' before continuing." -ForegroundColor Yellow
+        Write-Host "  Then re-run: .\start-k8s.ps1" -ForegroundColor Yellow
+    } else {
+        Write-Host "  ERROR: docker not found and winget isn't available." -ForegroundColor Red
+        Write-Host "    Install Docker Desktop manually: https://docs.docker.com/desktop/" -ForegroundColor Gray
     }
+    exit 1
+}
+
+# Docker CLI present doesn't mean the daemon is running yet.
+Invoke-Quiet { docker info *> $null } | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  ERROR: Docker is installed but the daemon isn't responding." -ForegroundColor Red
+    Write-Host "    Start Docker Desktop, wait for it to say 'Docker Desktop is running', and re-run this script." -ForegroundColor Gray
+    exit 1
+}
+
+if (-not $cliReady) {
+    Write-Host ""
+    Write-Warn "One or more tools were just installed but aren't on PATH in this terminal yet."
+    Write-Warn "Close and reopen your terminal, then re-run: .\start-k8s.ps1"
+    exit 1
 }
 Write-Ok "kind, kubectl, helm, docker found"
 
@@ -67,7 +178,7 @@ $step = 0
 $step++
 Write-Step $step $totalSteps "kind cluster '$ClusterName'"
 
-$existing = kind get clusters 2>&1
+$existing = Invoke-Quiet { kind get clusters 2>$null }
 if ($existing -contains $ClusterName) {
     Write-Ok "Cluster already exists -- reusing"
 } else {
@@ -90,20 +201,44 @@ if (-not (Test-Path $secretsFile)) {
 }
 
 $secretsContent = Get-Content $secretsFile -Raw
-if ($secretsContent -match 'OPENAI_API_KEY:\s+"REPLACE_ME"') {
-    Write-Host ""
-    Write-Host "  OPENAI_API_KEY is required for the agent to call GPT." -ForegroundColor Yellow
-    $key = Read-Host "  Enter your OpenAI API key"
-    if ($key) {
-        $secretsContent = $secretsContent -replace 'OPENAI_API_KEY:\s+"REPLACE_ME"', "OPENAI_API_KEY: `"$key`""
-        $secretsContent | Set-Content $secretsFile -Encoding utf8
-        Write-Ok "OPENAI_API_KEY saved to k8s/secrets.local.yaml"
-    } else {
-        Write-Warn "OPENAI_API_KEY not set -- agent will fail to call GPT"
+
+# For each key, reuse a value already provided somewhere else (env var / repo-root
+# .env / license.json) before ever asking interactively. Only OPENAI_API_KEY is
+# required -- the others are left as "REPLACE_ME" if nothing is found, same as before.
+$secretKeys = @(
+    @{ Name = "OPENAI_API_KEY";       Required = $true;  FallbackFile = $null },
+    @{ Name = "TRAVELPAYOUTS_TOKEN";  Required = $false; FallbackFile = $null },
+    @{ Name = "TRAVELPAYOUTS_MARKER"; Required = $false; FallbackFile = $null },
+    @{ Name = "RAVENDB_LICENSE";      Required = $false; FallbackFile = "license.json" }
+)
+
+foreach ($k in $secretKeys) {
+    if ($secretsContent -notmatch "$($k.Name):\s+`"REPLACE_ME`"") {
+        Write-Ok "$($k.Name) already set in k8s/secrets.local.yaml"
+        continue
     }
-} else {
-    Write-Ok "OPENAI_API_KEY already set"
+
+    $found = Find-ExistingValue -Name $k.Name -FallbackFile $k.FallbackFile
+    if ($found) {
+        $secretsContent = Set-SecretPlaceholder $secretsContent $k.Name $found.Value
+        Write-Ok "$($k.Name) reused from $($found.Source) -- not asking again"
+        continue
+    }
+
+    if ($k.Required) {
+        Write-Host ""
+        Write-Host "  $($k.Name) is required for the agent to call GPT." -ForegroundColor Yellow
+        $val = Read-Host "  Enter $($k.Name)"
+        if ($val) {
+            $secretsContent = Set-SecretPlaceholder $secretsContent $k.Name $val
+            Write-Ok "$($k.Name) saved to k8s/secrets.local.yaml"
+        } else {
+            Write-Warn "$($k.Name) not set -- agent will fail to call GPT"
+        }
+    }
 }
+
+$secretsContent | Set-Content $secretsFile -Encoding utf8
 
 # RavenDB cert/license secrets are NOT auto-generated here -- self-signed certs
 # for RavenDB need to come from RavenDB's own Setup Wizard / setup package, not
@@ -118,7 +253,7 @@ $requiredRavenSecrets = @(
 )
 $missingRaven = @()
 foreach ($s in $requiredRavenSecrets) {
-    kubectl get secret $s.Name -n $NS 2>$null | Out-Null
+    Invoke-Quiet { kubectl get secret $s.Name -n $NS 2>$null } | Out-Null
     if ($LASTEXITCODE -ne 0) { $missingRaven += $s }
 }
 if ($missingRaven.Count -gt 0) {
@@ -203,8 +338,10 @@ Write-Host ""
 
 $ravenReady = $false
 for ($i = 1; $i -le 40; $i++) {
-    $status = kubectl get ravendbcluster ravendb-cluster -n $NS `
-        -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>$null
+    $status = Invoke-Quiet {
+        kubectl get ravendbcluster ravendb-cluster -n $NS `
+            -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>$null
+    }
     if ($status -eq "True") { $ravenReady = $true; break }
     Write-Host ("  [{0,2}/40] Not ready yet... ({1})" -f $i, (Get-Date -Format "HH:mm:ss")) -ForegroundColor Gray
     Start-Sleep 5

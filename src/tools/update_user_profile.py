@@ -23,9 +23,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from pyravendb.commands.commands_data import PutDocumentCommand
-
-from src.db.client import doc_to_dict, get_store
+from src.db.client import doc_to_dict, get_store, put_document
 
 log = logging.getLogger(__name__)
 
@@ -100,9 +98,7 @@ async def update_user_profile(
     doc.pop("@metadata", None)
     doc["@metadata"] = {"@collection": "Users"}
 
-    store.get_request_executor().execute(
-        PutDocumentCommand(key=f"users/{user_id}", document=doc)
-    )
+    put_document(store, f"users/{user_id}", doc)
 
     log.info("Updated profile for %s: %s", user_id, list(updates.keys()))
     return {"saved": True, "user_id": user_id, "updated_fields": list(updates.keys())}

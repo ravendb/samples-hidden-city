@@ -15,9 +15,7 @@ but only then, not on every turn.
 import logging
 from datetime import datetime, timezone
 
-from pyravendb.commands.commands_data import PutDocumentCommand
-
-from src.db.client import doc_to_dict, get_store
+from src.db.client import doc_to_dict, get_store, put_document
 from src.db.models import ActiveConstraints, ConversationTurn, SessionDocument
 
 log = logging.getLogger(__name__)
@@ -36,7 +34,7 @@ def _load_session(store, doc_id: str, user_id: str) -> SessionDocument:
 def _write_session(store, doc_id: str, doc: SessionDocument) -> None:
     data = doc.model_dump(mode="json")
     data["@metadata"] = {"@collection": "Sessions"}
-    store.get_request_executor().execute(PutDocumentCommand(key=doc_id, document=data))
+    put_document(store, doc_id, data)
 
 
 async def persist_turn(user_id: str, session_id: str, user_message: str, assistant_response: str) -> dict:

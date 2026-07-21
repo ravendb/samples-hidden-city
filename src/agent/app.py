@@ -105,7 +105,9 @@ def _load_conversation_context(user_id: str, session_id: str) -> tuple[list[dict
 
     store = get_store()
     with store.open_session() as session:
-        session_raw, user_raw = session.load([session_doc_id, user_doc_id])
+        loaded = session.load([session_doc_id, user_doc_id])
+        session_raw = loaded.get(session_doc_id)
+        user_raw = loaded.get(user_doc_id)
 
     prior_turns: list[dict] = []
     if session_raw is not None:
@@ -202,7 +204,7 @@ async def get_airports() -> list[dict]:
     """Return all airport documents for the map."""
     store = get_store()
     with store.open_session() as session:
-        docs = list(session.query(collection_name="Airports").take(10_000))
+        docs = list(session.query_collection("Airports").take(10_000))
     return [doc_to_dict(d) for d in docs]
 
 
@@ -211,7 +213,7 @@ async def get_routes() -> list[dict]:
     """Return all route documents for the map arcs."""
     store = get_store()
     with store.open_session() as session:
-        docs = list(session.query(collection_name="Routes").take(10_000))
+        docs = list(session.query_collection("Routes").take(10_000))
     result = [doc_to_dict(d) for d in docs]
     return result
 
