@@ -88,21 +88,21 @@ Price drops → RavenDB Subscription ──push──▶ Worker → alert
   startup (agent boot and scraper CronJob both call it — it's idempotent, so
   whichever process starts first wins).
 - Every route document written by the bulk scraper (`src/scraper/run.py`) and
-  by the live-price cache-miss path (`src/tools/get_live_price.py`) gets an
+  by the live-price cache-miss path (`src/tools/get_live_prices.py`) gets an
   `@expires` timestamp 20 minutes in the future, computed by `expires_at()`.
 - RavenDB's background expiration process sweeps for expired documents every
   60 seconds and deletes them server-side — no CronJob, no `DELETE WHERE`
   query, no housekeeping code in this repo.
 - Net effect: stale prices disappear on their own. A cache read past its TTL
-  is a miss, not stale data — the agent falls through to `get_live_price` and
+  is a miss, not stale data — the agent falls through to `get_live_prices` and
   the document is rewritten with a fresh 20-minute clock.
 
 **What gets a TTL and what doesn't:**
 
 | Writer | Data | `@expires`? | Why |
 |--------|------|-------------|-----|
-| `src/scraper/run.py` (CronJob, bulk) | Scraped Travelpayouts prices | Yes, 20 min | Genuinely volatile — a fresh price is one `get_live_price` call away |
-| `src/tools/get_live_price.py` (cache miss) | Live Travelpayouts price | Yes, 20 min | Same reasoning — this *is* the live refresh path |
+| `src/scraper/run.py` (CronJob, bulk) | Scraped Travelpayouts prices | Yes, 20 min | Genuinely volatile — a fresh price is one `get_live_prices` call away |
+| `src/tools/get_live_prices.py` (cache miss) | Live Travelpayouts price | Yes, 20 min | Same reasoning — this *is* the live refresh path |
 | `src/db/seed.py` → `seed_routes()` | Hand-curated fixture routes with real `hubs` / `hidden_city_score` | **No** | These demonstrate the hidden-city scoring logic and have no live source to regenerate from — deleting them on a timer would silently break the demo until the next app restart reseeds them |
 | `src/db/seed.py` → `seed_airports()` | Airport reference data (IATA → city/country) | **No** | Static reference data, not a price |
 
@@ -330,11 +330,20 @@ missing keys on first run. You can also fill them in manually:
 |----------|----------|-----------------|
 | `OPENAI_API_KEY` | **Yes** — agent won't start without it | [platform.openai.com](https://platform.openai.com/) → API Keys |
 | `TRAVELPAYOUTS_TOKEN` | No — only needed for live price lookups and bulk scraper | [app.travelpayouts.com/profile](https://app.travelpayouts.com/profile/) → Aviasales Data API token |
+| `TRAVELPAYOUTS_MARKER` | No — only needed to resolve real connecting-airport (hub) data | [app.travelpayouts.com/profile](https://app.travelpayouts.com/profile/) → your partner marker/ID |
 | `RAVENDB_URL` | Yes | `http://localhost:8080` for local dev (already set in `.env.example`) |
 | `RAVENDB_DATABASE` | Yes | `hidden-city` (already set in `.env.example`) |
 
 Without a Travelpayouts token the agent falls back to fixture data seeded by
 `scripts/seed_local.py`. All demo scenarios work on fixture data.
+
+The bulk scraper (`/v2/prices/latest`) only returns price and a transfer count —
+never the actual connecting airport. For routes with transfers > 0, the scraper
+makes a separate real-time Flight Search call (search + poll) to resolve the
+real hub, capped at `MAX_HUB_LOOKUPS_PER_ORIGIN` (default 25) per scrape cycle
+since each lookup is far pricier than the bulk fetch. This needs
+`TRAVELPAYOUTS_MARKER` in addition to the token; without it, hub lookups are
+skipped and indirect routes keep `hubs: []` (score stays 0 for those until fixed).
 
 ### Kubernetes (local — kind)
 
@@ -434,7 +443,7 @@ Or use the Swagger UI at http://localhost:8000/docs.
 
 Chongqing (IATA: `CKG`) is not in the fixture data, so the agent will:
 1. Call `search_routes(origin="WAW", destination="CKG")` — returns empty.
-2. Call `get_live_price(origin="WAW", destination="CKG", route_type="hidden_city")`
+2. Call `get_live_prices(origin="WAW", destination="CKG")`
    — hits Travelpayouts if token is set, otherwise returns `found: false`.
 3. Explain that no routes were found and suggest nearby hubs (IST, DOH, DXB are
    common transfer points for Central Asia).
@@ -462,8 +471,10 @@ note the checked-baggage risk is eliminated, improving the adjusted score.
 ```
 src/
   agent/          FastAPI app + OpenAI tool-calling loop
-  tools/          4 MCP-style tools: search_routes, get_live_price,
-                  get_user_profile, save_conversation
+  tools/          LLM tools: search_routes, get_live_prices, get_user_profile,
+                  update_user_profile, update_constraints. save_conversation.py
+                  also holds persist_turn — called directly by app.py, not
+                  an LLM tool, so the turn is saved without a tool round trip
   db/             RavenDB client + Pydantic models
   hidden_city/    Scoring algorithm + enricher
   scraper/        Travelpayouts bulk ingest (CronJob)

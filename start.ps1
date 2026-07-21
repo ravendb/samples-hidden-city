@@ -112,8 +112,9 @@ if (Test-Path "$root\license.json") {
 $envLines = Get-Content "$root\.env"
 
 $keysInfo = @(
-    @{ Key = "OPENAI_API_KEY";      Desc = "OpenAI API key (agent won't start without it)";                       Required = $true  },
-    @{ Key = "TRAVELPAYOUTS_TOKEN"; Desc = "Travelpayouts / Aviasales Data API token (optional, bulk scraper)";   Required = $false }
+    @{ Key = "OPENAI_API_KEY";       Desc = "OpenAI API key (agent won't start without it)";                       Required = $true  },
+    @{ Key = "TRAVELPAYOUTS_TOKEN";  Desc = "Travelpayouts / Aviasales Data API token (optional, bulk scraper)";   Required = $false },
+    @{ Key = "TRAVELPAYOUTS_MARKER"; Desc = "Travelpayouts partner marker (optional, needed for hub/layover lookup)"; Required = $false }
 )
 
 $anyMissing = $false

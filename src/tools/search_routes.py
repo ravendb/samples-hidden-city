@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from src.db.client import doc_to_dict, get_store, load_airport_names
-from src.hidden_city.scorer import RiskFactor, score_candidate
+from src.hidden_city.scorer import HiddenCityCandidate, RiskFactor
 
 log = logging.getLogger(__name__)
 
@@ -36,7 +36,15 @@ _MAX_FETCH_BUFFER = 30  # cap on how many extra docs we pull when post-filtering
 
 
 def _adjusted_hidden_score(base_score: float, carry_on_only: bool) -> float:
-    """Apply checked-baggage risk to the stored base score (which has no risks baked in)."""
+    """Apply checked-baggage risk to a route's own precomputed best-hub score.
+
+    Used only for the informational hidden-city annotation on a plain
+    destination search — that stored score/via reflects a single hub (the best
+    one for that route), which is fine as a "by the way" flag. The
+    real_destination search path below scores every matching hub fresh instead,
+    since relying on the stored field there would silently drop valid
+    candidates whenever the requested hub isn't the route's single best one.
+    """
     if not carry_on_only:
         return base_score
     return round(base_score * _CHECKED_BAGGAGE_MULTIPLIER, 3)
@@ -96,20 +104,46 @@ async def search_routes(
     max_results: int = _DEFAULT_MAX_RESULTS,
 ) -> dict:
     store = get_store()
-    post_filtering = budget_max is not None or bool(countries_of_interest)
+    origin = origin.upper()
+    real_destination = real_destination.upper() if real_destination else None
+    hidden_city_mode = bool(real_destination) and not destination
+
+    post_filtering = budget_max is not None or bool(countries_of_interest) or hidden_city_mode
     fetch_count = min(max_results * 4, _MAX_FETCH_BUFFER) if post_filtering else max_results
 
+    price_direct: Optional[float] = None
+    direct_price_stale = False
+
     with store.open_session() as session:
-        query = session.query(collection_name="Routes").where_equals("origin", origin.upper())
+        if hidden_city_mode:
+            direct_doc = session.load(f"routes/{origin}-{real_destination}")
+            if direct_doc is not None:
+                direct_dict = doc_to_dict(direct_doc)
+                price_direct = direct_dict.get("typical_price", {}).get("min")
+                direct_price_stale = _is_stale(direct_dict.get("last_updated"))
+
+        query = session.query(collection_name="Routes").where_equals("origin", origin)
 
         if destination:
             query = query.where_equals("destination", destination.upper())
-        elif real_destination:
-            # Hidden city search: routes where real_destination is a layover hub
-            query = query.where_equals("hidden_city_via", real_destination.upper())
-            query = query.where_greater_than("hidden_city_score", 0.5)
+        elif hidden_city_mode:
+            # Match ANY route where real_destination is one of the hubs — not just
+            # the route whose stored hidden_city_via happens to be its single best
+            # hub, which would silently drop valid candidates via other hubs on the
+            # same route (see the module-level docstring on _adjusted_hidden_score).
+            query = query.where_equals("hubs", real_destination)
 
         raw_results = [doc_to_dict(r) for r in query.take(fetch_count)]
+
+    if hidden_city_mode and (price_direct is None or direct_price_stale):
+        return {
+            "routes": [],
+            "count": 0,
+            "note": (
+                f"No fresh direct price for {origin}->{real_destination} — call "
+                "get_live_prices for that route first, then retry the hidden city search."
+            ),
+        }
 
     codes: set[str] = set()
     for r in raw_results:
@@ -138,6 +172,29 @@ async def search_routes(
         ):
             continue
 
+        hidden_city_info = None
+        if hidden_city_mode:
+            price_hidden = r.get("typical_price", {}).get("min")
+            if price_hidden is None:
+                continue
+            risks = [RiskFactor.CHECKED_BAGGAGE] if carry_on_only else []
+            candidate = HiddenCityCandidate(
+                origin=from_code,
+                real_destination=real_destination,
+                decoy_destination=to_code,
+                price_direct=price_direct,
+                price_hidden=price_hidden,
+                risks=risks,
+            )
+            if not candidate.should_surface:
+                continue
+            hidden_city_info = {
+                "via": real_destination,
+                "decoy_to": to_code,
+                "score": round(candidate.score, 2),
+                "risks": [risk.value for risk in risks],
+            }
+
         stale = _is_stale(r.get("last_updated"))
         route_entry: dict = {
             "from": from_code,
@@ -161,29 +218,46 @@ async def search_routes(
             route_entry["duration"] = f"{h}h {m:02d}m" if h else f"{m}m"
         route_entry["has_schedule"] = bool(r.get("depart_time"))
 
-        base_score = r.get("hidden_city_score", 0.0)
-        if base_score > 0.5:
-            adj_score = _adjusted_hidden_score(base_score, carry_on_only)
-            risks = []
-            if carry_on_only:
-                risks.append("checked_baggage")
-            route_entry["hidden_city"] = {
-                "via": r.get("hidden_city_via"),
-                "decoy_to": r.get("hidden_city_decoy"),
-                "score": round(adj_score, 2),
-                "risks": risks,
-            }
+        if hidden_city_info is not None:
+            route_entry["hidden_city"] = hidden_city_info
+        else:
+            base_score = r.get("hidden_city_score", 0.0)
+            if base_score > 0.5:
+                adj_score = _adjusted_hidden_score(base_score, carry_on_only)
+                risks = []
+                if carry_on_only:
+                    risks.append("checked_baggage")
+                route_entry["hidden_city"] = {
+                    "via": r.get("hidden_city_via"),
+                    "decoy_to": r.get("hidden_city_decoy"),
+                    "score": round(adj_score, 2),
+                    "risks": risks,
+                }
 
         routes.append(route_entry)
 
     result: dict = {"routes": routes, "count": len(routes)}
     if not routes:
-        requested = (destination or real_destination or origin).upper()
-        alternatives = _nearby_alternatives(store, requested)
-        if alternatives:
-            result["nearby_alternatives"] = alternatives
+        # Report nearby alternatives for BOTH sides explicitly, keyed by role, rather
+        # than guessing which single side is "the disconnected one" — a route count
+        # on either airport (e.g. leftover live-price cache entries from an unrelated
+        # earlier search) is not a reliable signal for that, and picking the wrong
+        # side produces a nonsensical answer (e.g. "try a nearby airport to Warsaw"
+        # when the actual gap is on the origin side). Keying by role also stops the
+        # model from attributing an alternative to the wrong side.
+        other_side = destination or real_destination
+        near_origin = _nearby_alternatives(store, origin)
+        near_destination = _nearby_alternatives(store, other_side.upper()) if other_side else []
+        if near_origin or near_destination:
+            result["nearby_alternatives"] = {
+                "near_origin": near_origin,
+                "near_destination": near_destination,
+            }
             result["note"] = (
-                "No routes found for the requested airport. Ask the user before "
-                "searching one of these nearby alternatives — never substitute silently."
+                "No routes found. near_origin lists alternative DEPARTURE airports "
+                "near the origin; near_destination lists alternative ARRIVAL airports "
+                "near the requested destination. These are the ONLY valid "
+                "alternatives — never mention any other airport. Ask the user before "
+                "searching one of them; never substitute silently."
             )
     return result

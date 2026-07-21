@@ -144,7 +144,7 @@ async def run_agent(
 
     for iteration in range(1, MAX_ITERATIONS + 1):
         # Force at least one tool call on the first turn — otherwise "auto" lets the
-        # model skip search_routes/get_live_price entirely and answer from parametric
+        # model skip search_routes/get_live_prices entirely and answer from parametric
         # knowledge, which is the main way ungrounded city names/prices sneak in.
         tool_choice = "required" if iteration == 1 else "auto"
         response = await client.chat.completions.create(
@@ -308,6 +308,7 @@ async def stream_agent(
 
             yield sse({
                 "type": "done",
+                "response": final_text,
                 "input_tokens": total_input,
                 "output_tokens": total_output,
                 "total_tokens": total_input + total_output,

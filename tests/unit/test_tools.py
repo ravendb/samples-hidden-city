@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.tools.save_conversation import save_conversation
+from src.tools.save_conversation import persist_turn, update_constraints
 from src.tools.search_routes import _is_stale, search_routes
 from src.tools.update_user_profile import update_user_profile
 
@@ -88,12 +88,16 @@ class TestSearchRoutes:
     @pytest.mark.asyncio
     async def test_empty_results_surfaces_nearby_alternative(self):
         """No KRK routes are seeded, but KRK's airport doc lists WAW as nearby (290km,
-        train available) — the tool should surface it for the agent to ask about,
-        never auto-substitute it into the results."""
+        train available) — the tool should surface it under near_origin (KRK is the
+        origin here) for the agent to ask about, never auto-substitute it into the
+        results. LHR (the destination) has no nearby doc configured in this test, so
+        near_destination stays empty — confirming the two sides are kept separate."""
         mock_store = self._mock_session_with_routes([])
-        mock_store.open_session.return_value.load.return_value = {
-            "nearby": [{"iata": "WAW", "distance_km": 290, "train": True}]
-        }
+        mock_store.open_session.return_value.load.side_effect = lambda key: (
+            {"nearby": [{"iata": "WAW", "distance_km": 290, "train": True}]}
+            if key == "airports/KRK"
+            else None
+        )
 
         with (
             patch("src.tools.search_routes.get_store", return_value=mock_store),
@@ -105,9 +109,10 @@ class TestSearchRoutes:
             result = await search_routes(origin="KRK", destination="LHR")
 
         assert result["count"] == 0
-        assert result["nearby_alternatives"] == [
+        assert result["nearby_alternatives"]["near_origin"] == [
             {"airport": "WAW", "distance_km": 290, "train": True, "city": "Warsaw"}
         ]
+        assert result["nearby_alternatives"]["near_destination"] == []
 
     @pytest.mark.asyncio
     async def test_carry_on_lowers_hidden_city_score(self):
@@ -267,6 +272,138 @@ class TestSearchRoutes:
         )
 
 
+class TestSearchRoutesHiddenCity:
+    def _mock_store(self, candidate_routes: list[dict], direct_route_doc: dict | None):
+        mock_query = MagicMock()
+        mock_query.where_equals.return_value = mock_query
+        mock_query.take.return_value = mock_query
+        mock_query.__iter__ = MagicMock(side_effect=lambda: iter(candidate_routes))
+
+        mock_session = MagicMock()
+        mock_session.__enter__ = MagicMock(return_value=mock_session)
+        mock_session.__exit__ = MagicMock(return_value=False)
+        mock_session.query.return_value = mock_query
+        mock_session.load.return_value = direct_route_doc
+
+        mock_store = MagicMock()
+        mock_store.open_session.return_value = mock_session
+        return mock_store
+
+    @pytest.mark.asyncio
+    async def test_surfaces_candidate_via_non_best_hub(self):
+        """WAW->ORD (hubs=[FRA, AMS]) only got hidden_city_via="FRA" baked in at seed
+        time because FRA scored higher than AMS for that specific route. A search for
+        real_destination=AMS must still surface ORD as a valid decoy — the query
+        should check every hub on the route, not just whichever one happened to win
+        at enrichment time. WAW->EWR (hubs=[LHR, AMS]) is included too and must be
+        excluded, since its savings via AMS alone fall below the surface threshold."""
+        now = datetime.now(timezone.utc).isoformat()
+        direct_route = {
+            "origin": "WAW",
+            "destination": "AMS",
+            "typical_price": {"min": 320, "max": 420},
+            "last_updated": now,
+        }
+        candidates = [
+            {
+                "origin": "WAW",
+                "destination": "ORD",
+                "hubs": ["FRA", "AMS"],
+                "typical_price": {"min": 155, "max": 240},
+                "hidden_city_score": 0.592,
+                "hidden_city_via": "FRA",
+                "hidden_city_decoy": "ORD",
+                "last_updated": now,
+            },
+            {
+                "origin": "WAW",
+                "destination": "EWR",
+                "hubs": ["LHR", "AMS"],
+                "typical_price": {"min": 230, "max": 330},
+                "hidden_city_score": 0.603,
+                "hidden_city_via": "LHR",
+                "hidden_city_decoy": "EWR",
+                "last_updated": now,
+            },
+        ]
+        mock_store = self._mock_store(candidates, direct_route)
+
+        with (
+            patch("src.tools.search_routes.get_store", return_value=mock_store),
+            patch("src.tools.search_routes.load_airport_names", return_value={}),
+        ):
+            result = await search_routes(origin="WAW", real_destination="AMS")
+
+        assert result["count"] == 1
+        assert result["routes"][0]["to"] == "ORD"
+        assert result["routes"][0]["hidden_city"]["via"] == "AMS"
+        assert result["routes"][0]["hidden_city"]["decoy_to"] == "ORD"
+        assert result["routes"][0]["hidden_city"]["score"] > 0.5
+
+    @pytest.mark.asyncio
+    async def test_no_direct_price_returns_note_instead_of_guessing(self):
+        mock_store = self._mock_store([], direct_route_doc=None)
+
+        with patch("src.tools.search_routes.get_store", return_value=mock_store):
+            result = await search_routes(origin="WAW", real_destination="AMS")
+
+        assert result["count"] == 0
+        assert result["routes"] == []
+        assert "note" in result
+
+    @pytest.mark.asyncio
+    async def test_stale_direct_price_returns_note_instead_of_scoring(self):
+        """A >2h-old direct price is treated the same as a missing one — scoring
+        against a stale baseline would produce an unreliable hidden-city score."""
+        stale_ts = (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat()
+        direct_route = {
+            "origin": "WAW",
+            "destination": "AMS",
+            "typical_price": {"min": 320, "max": 420},
+            "last_updated": stale_ts,
+        }
+        mock_store = self._mock_store([], direct_route)
+
+        with patch("src.tools.search_routes.get_store", return_value=mock_store):
+            result = await search_routes(origin="WAW", real_destination="AMS")
+
+        assert result["count"] == 0
+        assert "note" in result
+
+    @pytest.mark.asyncio
+    async def test_carry_on_only_can_drop_candidate_below_threshold(self):
+        now = datetime.now(timezone.utc).isoformat()
+        direct_route = {
+            "origin": "WAW",
+            "destination": "AMS",
+            "typical_price": {"min": 320, "max": 420},
+            "last_updated": now,
+        }
+        candidates = [
+            {
+                "origin": "WAW",
+                "destination": "ORD",
+                "hubs": ["FRA", "AMS"],
+                "typical_price": {"min": 155, "max": 240},
+                "hidden_city_score": 0.592,
+                "hidden_city_via": "FRA",
+                "hidden_city_decoy": "ORD",
+                "last_updated": now,
+            },
+        ]
+        mock_store = self._mock_store(candidates, direct_route)
+
+        with (
+            patch("src.tools.search_routes.get_store", return_value=mock_store),
+            patch("src.tools.search_routes.load_airport_names", return_value={}),
+        ):
+            result = await search_routes(
+                origin="WAW", real_destination="AMS", carry_on_only=True
+            )
+
+        assert result["count"] == 0
+
+
 class TestSaveConversation:
     def _make_mock_store(self, existing_doc=None):
         mock_session = MagicMock()
@@ -290,7 +427,7 @@ class TestSaveConversation:
         mock_store, stored_docs = self._make_mock_store(existing_doc=None)
 
         with patch("src.tools.save_conversation.get_store", return_value=mock_store):
-            result = await save_conversation(
+            result = await persist_turn(
                 user_id="u1",
                 session_id="1",
                 user_message="Find flights",
@@ -319,11 +456,9 @@ class TestSaveConversation:
         mock_store, stored_docs = self._make_mock_store(existing_doc=existing)
 
         with patch("src.tools.save_conversation.get_store", return_value=mock_store):
-            await save_conversation(
+            await update_constraints(
                 user_id="u1",
                 session_id="1",
-                user_message="Only carry-on",
-                assistant_response="Noted.",
                 constraints={"carry_on_only": True},
             )
 

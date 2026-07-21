@@ -10,3 +10,4 @@ data:
   RAVENDB_DATABASE: "hidden-city"
   LLM_MODEL: "gpt-4o-mini"
   MAX_TOKENS_BUDGET: "1500"
+  MAX_HUB_LOOKUPS_PER_ORIGIN: "25"

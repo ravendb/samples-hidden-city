@@ -23,6 +23,7 @@ from src.db.models import ConversationTurn
 from src.db.seed import seed_if_empty
 from src.tools.get_user_profile import DEFAULT_PREFERENCES, build_preferences
 from src.tools.get_user_profile import get_user_profile as _get_user_profile
+from src.tools.save_conversation import persist_turn
 from src.tools.update_user_profile import update_user_profile as _update_user_profile
 from src.tools.user_attachments import (
     ATTACHMENT_TYPES,
@@ -60,7 +61,8 @@ async def _startup() -> None:
         log.exception("DB seed failed — continuing without fixture data")
 
     token = os.getenv("TRAVELPAYOUTS_TOKEN")
-    if token:
+    marker = os.getenv("TRAVELPAYOUTS_MARKER")
+    if token and marker:
         try:
             from src.scraper.run import run as _run_scraper
             await _run_scraper()
@@ -68,7 +70,8 @@ async def _startup() -> None:
             print(f"  Travelpayouts → failed: {_e}", flush=True)
             log.exception("Travelpayouts fetch failed at startup")
     else:
-        print("  Travelpayouts → TRAVELPAYOUTS_TOKEN not set, skipping", flush=True)
+        missing = "TRAVELPAYOUTS_TOKEN" if not token else "TRAVELPAYOUTS_MARKER"
+        print(f"  Travelpayouts → {missing} not set, skipping", flush=True)
     print("", flush=True)
 
 
@@ -284,6 +287,13 @@ async def chat(request: ChatRequest) -> ChatResponse:
     if result.grounding_warnings:
         log.warning("Grounding warnings: %s", result.grounding_warnings)
 
+    await persist_turn(
+        user_id=request.user_id,
+        session_id=request.session_id,
+        user_message=request.message,
+        assistant_response=result.response,
+    )
+
     return ChatResponse(
         response=result.response,
         session_id=request.session_id,
@@ -309,6 +319,14 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                 preferences=preferences,
             ):
                 yield chunk
+                payload = json.loads(chunk[len("data: "):])
+                if payload.get("type") == "done":
+                    await persist_turn(
+                        user_id=request.user_id,
+                        session_id=request.session_id,
+                        user_message=request.message,
+                        assistant_response=payload["response"],
+                    )
         except Exception as exc:
             log.exception("stream_agent error")
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"

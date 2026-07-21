@@ -1,8 +1,8 @@
 import logging
 
-from src.tools.get_live_price import get_live_price
+from src.tools.get_live_prices import get_live_prices
 from src.tools.get_user_profile import get_user_profile
-from src.tools.save_conversation import save_conversation
+from src.tools.save_conversation import update_constraints
 from src.tools.search_routes import search_routes
 from src.tools.update_user_profile import update_user_profile
 
@@ -10,9 +10,9 @@ log = logging.getLogger(__name__)
 
 _TOOLS = {
     "search_routes": search_routes,
-    "get_live_price": get_live_price,
+    "get_live_prices": get_live_prices,
     "get_user_profile": get_user_profile,
-    "save_conversation": save_conversation,
+    "update_constraints": update_constraints,
     "update_user_profile": update_user_profile,
 }
 

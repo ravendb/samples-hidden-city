@@ -179,13 +179,14 @@ User ──prompt only──▶ Agent (FastAPI, k8s) ──▶ OpenAI API
 3. RavenDB returns a pre-structured document: origin, destination, price range,
    hidden city score. Serialized to ~400 tokens.
 4. Tool result sent to LLM as part of the same API call.
-5. Model responds. `save_conversation` tool appends the turn to RavenDB.
+5. Model responds. `persist_turn` appends the turn to RavenDB server-side —
+   no LLM tool call, so the response text is never generated twice.
 6. **Nothing leaves the cluster except the user's 100-token prompt.**
 
 **What happens (cache miss):**
 
 1. `search_routes` returns `stale: true`.
-2. Agent calls `get_live_price(origin="WAW", destination="LHR", route_type="direct")`.
+2. Agent calls `get_live_prices(origin="WAW", destination="LHR")`.
 3. Travelpayouts live API is called once. Result is written back to RavenDB.
 4. Same 1 500 token LLM call.
 5. Next user asking the same route hits the cache — zero Travelpayouts calls.

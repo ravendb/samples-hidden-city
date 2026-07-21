@@ -78,7 +78,7 @@ and when. Nothing is blindly injected. Only the user's prompt leaves the cluster
 │   ├── scraper/              # Travelpayouts bulk ingest (CronJob)
 │   ├── worker/               # RavenDB subscription listener + alert push
 │   ├── agent/                # FastAPI app + LLM agent loop
-│   ├── tools/                # Tool implementations (search_routes, get_live_price, …)
+│   ├── tools/                # Tool implementations (search_routes, get_live_prices, …)
 │   ├── hidden_city/          # Hidden city scoring logic
 │   └── chat/                 # Chat UI
 └── tests/
@@ -195,9 +195,16 @@ The model must call RavenDB explicitly as a tool — it decides what to fetch.
 | Tool                 | Description                                                              |
 |----------------------|--------------------------------------------------------------------------|
 | `search_routes`      | Vector + doc query against RavenDB: origin, dest, date, stops, price, semantic similarity |
-| `get_live_price`     | Live call to Travelpayouts on cache miss — fetches fresh price and writes back to RavenDB |
+| `get_live_prices`    | Live call to Travelpayouts on cache miss — single route, or several cheapest destinations from an origin when destination is omitted ("anywhere from home") — writes back to RavenDB |
 | `get_user_profile`   | Read user profile and preferences from RavenDB attachments               |
-| `save_conversation`  | Persist the current turn to RavenDB after each exchange                  |
+| `update_constraints` | Save a trip-specific constraint (carry-on only for this trip, max stops) — called only when the user states one |
+
+Turn persistence itself (`persist_turn` in `src/tools/save_conversation.py`) is
+NOT an LLM tool — it is called directly by `src/agent/app.py` after the model's
+final response, using the response text the server already has. Routing it
+through a tool call would force the model to restate its full answer as a tool
+argument before saying it again as the reply, doubling output tokens and
+adding a full extra round trip for zero benefit.
 
 Hidden city scoring and semantic similarity are not separate tools — they are
 logic inside `search_routes` (vector query handles similarity; hidden city score
@@ -273,7 +280,8 @@ Conversation state is a RavenDB document (`sessions/...`), not pod RAM, not Redi
 
 - Persists across pod restarts — demo beat: kill the agent pod mid-conversation, query resumes
 - `active_constraints` (carry-on only, max stops, etc.) are indexed fields, not buried in turn text
-- `save_conversation` tool appends each turn after the model responds
+- `persist_turn` appends each turn after the model responds — called directly by the FastAPI
+  handler, not through an LLM tool call (see "RavenDB as Agent Tool" above)
 - At the start of each turn the agent reads last N turns + `active_constraints` only — never the full raw history
 - Binary user data (passport scan, bag photo) lives as attachments on `users/...` document, fetched whole by `get_user_profile`
 

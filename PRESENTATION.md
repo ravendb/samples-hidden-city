@@ -89,7 +89,7 @@ Redis daje TTL cache, ale nie daje vector search, full-text, subscriptions ani t
 
 "Co z vendor lockiem?"
 
-RavenDB ma otwarte API klienckie. Narzędzia agenta to thin wrapper — search_routes, get_live_price. Swap za inny store to podmiana implementacji narzędzia, nie przepisanie agenta.
+RavenDB ma otwarte API klienckie. Narzędzia agenta to thin wrapper — search_routes, get_live_prices. Swap za inny store to podmiana implementacji narzędzia, nie przepisanie agenta.
 
 "Co z większym ruchem?"
 

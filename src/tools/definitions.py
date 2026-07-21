@@ -10,13 +10,15 @@ TOOL_DEFINITIONS = [
             "name": "search_routes",
             "description": (
                 "Search RavenDB for flight routes. Supports direct and hidden city lookups. "
-                "Always call this before get_live_price. Returns stale=true if data is >2h old. "
+                "Always call this before get_live_prices. Returns stale=true if data is >2h old. "
                 "budget_max, budget_currency, countries_of_interest, and carry_on_only are "
                 "auto-filled from the user's saved preferences if you omit them — only pass "
                 "them yourself to override for this one search. "
-                "If no routes are found, may return nearby_alternatives (airport, city, "
-                "distance_km, train) for a nearby airport that was NOT searched — ask the "
-                "user before searching one of them, never substitute silently."
+                "If no routes are found, may return nearby_alternatives with two separate "
+                "lists — near_origin (alternative departure airports) and near_destination "
+                "(alternative arrival airports), each with airport/city/distance_km/train. "
+                "Neither has been searched — ask the user before searching one, never "
+                "substitute silently, and never mix up which list an airport came from."
             ),
             "parameters": {
                 "type": "object",
@@ -65,23 +67,32 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
-            "name": "get_live_price",
+            "name": "get_live_prices",
             "description": (
-                "Fetch a live price from Travelpayouts. "
+                "Fetch live price(s) from Travelpayouts. "
                 "Use when search_routes returns stale=true, no results, or has_schedule=false. "
-                "Returns price and departure date."
+                "Pass destination for a single-route lookup. Omit destination for an "
+                "'anywhere from origin' search — returns the cheapest destinations found, "
+                "up to max_results. Returns price and departure date per route."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "origin": {"type": "string", "description": "Departure IATA code"},
-                    "destination": {"type": "string", "description": "Endpoint IATA code"},
+                    "destination": {
+                        "type": "string",
+                        "description": "Endpoint IATA code. Omit for an 'anywhere from origin' search.",
+                    },
                     "date": {
                         "type": "string",
                         "description": "Departure date YYYY-MM-DD. Omit to use the nearest available.",
                     },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Max destinations to return when destination is omitted (default 5).",
+                    },
                 },
-                "required": ["origin", "destination"],
+                "required": ["origin"],
             },
         },
     },
@@ -172,27 +183,24 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
-            "name": "save_conversation",
+            "name": "update_constraints",
             "description": (
-                "Persist the current turn to RavenDB. Call after your final response. "
-                "Include any constraints the user expressed in this turn."
+                "Save a trip-specific constraint for this session only (not a durable "
+                "profile preference) — e.g. carry-on only for this trip, max 1 stop. "
+                "Call only when the user actually states one this turn; skip otherwise. "
+                "The turn itself is saved automatically — you don't need a tool call for that."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "user_id": {"type": "string"},
                     "session_id": {"type": "string"},
-                    "user_message": {"type": "string"},
-                    "assistant_response": {"type": "string"},
                     "constraints": {
                         "type": "object",
-                        "description": (
-                            "Constraint updates from this turn. "
-                            "Keys: carry_on_only (bool), max_stops (int), max_duration_min (int)."
-                        ),
+                        "description": "Keys: carry_on_only (bool), max_stops (int), max_duration_min (int).",
                     },
                 },
-                "required": ["user_id", "session_id", "user_message", "assistant_response"],
+                "required": ["user_id", "session_id", "constraints"],
             },
         },
     },

@@ -1,10 +1,16 @@
 """
-get_live_price tool — refreshes price from Travelpayouts on cache miss.
+get_live_prices tool — refreshes price(s) from Travelpayouts on cache miss.
 
 Travelpayouts /v1/prices/cheap returns: price, departure date/time, stops count.
 It does NOT return arrival time or intermediate hub airports.
 
-Strategy:
+Two modes, both going through the same endpoint:
+- destination given -> single-route lookup (as before).
+- destination omitted -> "anywhere from origin": Travelpayouts returns cheapest
+  prices to several destinations from origin in one call, used for the
+  "anywhere from home" quick search.
+
+Strategy per destination resolved:
 - Load the existing RavenDB route doc to preserve hubs and duration_avg_min.
 - Fetch fresh price + depart_time from Travelpayouts.
 - Compute arrive_time = depart_time + duration_avg_min (if both known).
@@ -13,6 +19,7 @@ Strategy:
 import logging
 import os
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 import httpx
 from pyravendb.commands.commands_data import PutDocumentCommand
@@ -25,38 +32,57 @@ log = logging.getLogger(__name__)
 
 _BASE = "https://api.travelpayouts.com"
 _PRICE_SPREAD = 0.15
+_DEFAULT_MAX_RESULTS = 5
 
 
-async def _travelpayouts_search(origin: str, destination: str, date: str) -> dict:
+async def _travelpayouts_search(
+    origin: str, destination: Optional[str], date: str, max_results: int
+) -> list[dict]:
     token = os.environ["TRAVELPAYOUTS_TOKEN"]
     params = {
         "origin": origin,
-        "destination": destination,
         "depart_date": date[:7],  # API expects YYYY-MM
         "token": token,
         "currency": "usd",
     }
+    if destination:
+        params["destination"] = destination
+
     async with httpx.AsyncClient(timeout=15.0) as client:
         response = await client.get(f"{_BASE}/v1/prices/cheap", params=params)
         response.raise_for_status()
 
     payload = response.json()
     if not payload.get("success"):
-        return {"found": False}
+        return []
 
+    # /v1/prices/cheap nests each destination by number-of-stops:
+    # {"AER": {"0": {price, airline, departure_at, ...}, "1": {...}}, ...}
     data = payload.get("data", {})
-    dest_data = data.get(destination) or (list(data.values())[0] if data else None)
-    if not dest_data:
-        return {"found": False}
+    if destination:
+        by_stops = data.get(destination) or (list(data.values())[0] if data else None)
+        entries = [(destination, by_stops)] if by_stops else []
+    else:
+        entries = list(data.items())[:max_results]
 
-    depart_at = dest_data.get("departure_at", "")
-    return {
-        "found": True,
-        "price_usd": float(dest_data.get("price", 0)),
-        "depart_date": depart_at[:10] if depart_at else date,
-        "depart_time": depart_at[11:16] if len(depart_at) >= 16 else None,
-        "stops": dest_data.get("number_of_changes", 0),
-    }
+    results = []
+    for dest, by_stops in entries:
+        if not by_stops:
+            continue
+        stops_key, info = min(
+            by_stops.items(), key=lambda kv: kv[1].get("price", float("inf"))
+        )
+        depart_at = info.get("departure_at", "")
+        results.append(
+            {
+                "destination": dest,
+                "price_usd": float(info.get("price", 0)),
+                "depart_date": depart_at[:10] if depart_at else date,
+                "depart_time": depart_at[11:16] if len(depart_at) >= 16 else None,
+                "stops": int(stops_key) if str(stops_key).isdigit() else 0,
+            }
+        )
+    return results
 
 
 def _compute_arrive_time(depart_time: str | None, duration_min: int) -> str | None:
@@ -120,50 +146,56 @@ def _write_to_ravendb(
         log.exception("Failed to cache price for %s→%s — continuing", origin, destination)
 
 
-async def get_live_price(
+async def get_live_prices(
     origin: str,
-    destination: str,
-    date: str | None = None,
+    destination: Optional[str] = None,
+    date: Optional[str] = None,
+    max_results: int = _DEFAULT_MAX_RESULTS,
 ) -> dict:
     origin = origin.upper()
-    destination = destination.upper()
+    destination = destination.upper() if destination else None
     if not date:
         date = (datetime.now(timezone.utc) + timedelta(days=7)).strftime("%Y-%m-%d")
 
-    existing = _load_existing_route(origin, destination)
-    result = await _travelpayouts_search(origin, destination, date)
+    found = await _travelpayouts_search(origin, destination, date, max_results)
+    if not found:
+        return {"routes": [], "count": 0}
 
-    if not result.get("found"):
-        return result
+    codes = {origin} | {item["destination"] for item in found}
+    names = load_airport_names(get_store(), list(codes))
 
-    arrive_time = _compute_arrive_time(
-        result.get("depart_time"),
-        existing.get("duration_avg_min", 0),
-    )
+    routes = []
+    for item in found:
+        dest = item["destination"]
+        existing = _load_existing_route(origin, dest)
+        arrive_time = _compute_arrive_time(
+            item.get("depart_time"), existing.get("duration_avg_min", 0)
+        )
+        _write_to_ravendb(
+            origin=origin,
+            destination=dest,
+            price=item["price_usd"],
+            depart_date=item.get("depart_date"),
+            depart_time=item.get("depart_time"),
+            arrive_time=arrive_time,
+            existing=existing,
+        )
 
-    _write_to_ravendb(
-        origin=origin,
-        destination=destination,
-        price=result["price_usd"],
-        depart_date=result.get("depart_date"),
-        depart_time=result.get("depart_time"),
-        arrive_time=arrive_time,
-        existing=existing,
-    )
+        entry: dict = {
+            "to": dest,
+            "price_usd": item["price_usd"],
+            "depart_date": item.get("depart_date"),
+            "depart_time": item.get("depart_time"),
+            "arrive_time": arrive_time,
+            "hubs": existing.get("hubs", []),
+            "duration_min": existing.get("duration_avg_min", 0),
+            "stops": item.get("stops", 0),
+        }
+        if dest in names:
+            entry["to_city"] = names[dest]["city"]
+        routes.append(entry)
 
-    names = load_airport_names(get_store(), [origin, destination])
-    response: dict = {
-        "found": True,
-        "price_usd": result["price_usd"],
-        "depart_date": result.get("depart_date"),
-        "depart_time": result.get("depart_time"),
-        "arrive_time": arrive_time,
-        "hubs": existing.get("hubs", []),
-        "duration_min": existing.get("duration_avg_min", 0),
-        "stops": result.get("stops", 0),
-    }
+    result: dict = {"routes": routes, "count": len(routes), "from": origin}
     if origin in names:
-        response["from_city"] = names[origin]["city"]
-    if destination in names:
-        response["to_city"] = names[destination]["city"]
-    return response
+        result["from_city"] = names[origin]["city"]
+    return result

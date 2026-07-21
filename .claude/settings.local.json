@@ -4,7 +4,9 @@
       "PowerShell($content = Get-Content \"c:\\\\Users\\\\weronika.kolodziej\\\\samples-hidden-city\\\\src\\\\agent\\\\loop.py\" -Raw -Encoding UTF8; $bytes = [System.Text.Encoding]::UTF8.GetBytes\\($content[-100..-1] -join ''\\); Write-Host \\($bytes | ForEach-Object { $_.ToString\\(\"X2\"\\) } | Select-Object -Last 50\\) -Separator \" \")",
       "Bash(python -c \"import pyravendb, os; print\\(os.path.dirname\\(pyravendb.__file__\\)\\)\")",
       "Bash(pip show *)",
-      "Bash(python -m py_compile src/agent/loop.py src/agent/app.py)"
+      "Bash(python -m py_compile src/agent/loop.py src/agent/app.py)",
+      "WebSearch",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('src/scraper/travelpayouts.py', encoding='utf-8'\\).read\\(\\)\\); ast.parse\\(open\\('src/scraper/run.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")"
     ]
   }
 }
