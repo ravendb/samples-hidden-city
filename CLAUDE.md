@@ -173,9 +173,17 @@ on the separate `users/...` document.
 
 ### Vectors
 
-Route embeddings for semantic similarity search ("something like LHR but cheaper",
-"fastest Europe→Asia hub"). Stored as vector fields on route documents — no
-separate vector DB needed.
+Airport documents carry a `location_vector` (a 3D unit-vector projection of
+lat/lng — see `src/db/geo.py`), used by `search_routes`'s vector-search
+fallback to find geographically nearby airports when no direct route exists,
+without a hand-curated "nearby airports" list. Requires RavenDB 7.0+ (native
+vector search did not exist before) — see `src/db/client.py` and the modern
+`ravendb` Python client. Stored as a field on the same document — no separate
+vector DB needed.
+
+Route-level semantic similarity search ("something like LHR but cheaper",
+"fastest Europe→Asia hub") is a distinct, not-yet-built idea — would need
+route embeddings stored as vector fields on route documents. Not implemented.
 
 ### Attachments
 
@@ -194,7 +202,7 @@ The model must call RavenDB explicitly as a tool — it decides what to fetch.
 
 | Tool                 | Description                                                              |
 |----------------------|--------------------------------------------------------------------------|
-| `search_routes`      | Vector + doc query against RavenDB: origin, dest, date, stops, price, semantic similarity |
+| `search_routes`      | Doc query against RavenDB: origin, dest, date, stops, price, hidden city hubs. If no direct route exists: tries a connecting-hub search (origin→X→destination via cached routes) first, then falls back to vector search over airport `location_vector` for geographically nearby airports |
 | `get_live_prices`    | Live call to Travelpayouts on cache miss — single route, or several cheapest destinations from an origin when destination is omitted ("anywhere from home") — writes back to RavenDB |
 | `get_user_profile`   | Read user profile and preferences from RavenDB attachments               |
 | `update_constraints` | Save a trip-specific constraint (carry-on only for this trip, max stops) — called only when the user states one |
@@ -206,9 +214,11 @@ through a tool call would force the model to restate its full answer as a tool
 argument before saying it again as the reply, doubling output tokens and
 adding a full extra round trip for zero benefit.
 
-Hidden city scoring and semantic similarity are not separate tools — they are
-logic inside `search_routes` (vector query handles similarity; hidden city score
-is a field on the route document, filtered at query time).
+Hidden city scoring and nearby-airport vector search are not separate tools —
+they are logic inside `search_routes` (hidden city score is a field on the
+route document, filtered at query time; nearby-airport lookup is a
+vector_search query against airport `location_vector`, used only as a
+fallback when no direct or connecting route is found).
 
 ### What Goes Outbound
 
@@ -318,7 +328,7 @@ Conversation state is a RavenDB document (`sessions/...`), not pod RAM, not Redi
 - Unit: hidden city detection scoring logic
 - Unit: conversation memory truncation (only last N turns passed to model)
 - Integration: RavenDB tool `search_routes` returns correct results for known fixtures
-- Integration: `find_similar_routes` vector search returns semantically relevant routes
+- Integration: vector-search nearby-airport lookup in `search_routes` returns geographically relevant airports
 - Integration: session document survives simulated pod restart
 - Always run `pytest tests/unit/` before committing
 

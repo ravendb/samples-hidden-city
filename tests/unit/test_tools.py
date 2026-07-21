@@ -72,7 +72,9 @@ class _FilterableQuery:
 
 
 class TestSearchRoutes:
-    def _mock_session_with_routes(self, routes: list[dict], airport_candidates: list[dict] | None = None):
+    def _mock_session_with_routes(
+        self, routes: list[dict], airport_candidates: list[dict] | None = None
+    ):
         """Routes queries (used by the main search + hub-join) and Airports queries
         (used by the vector-search nearby lookup) get independent, freshly-filtered
         query objects per call, routed by collection name — mirroring how
@@ -137,12 +139,13 @@ class TestSearchRoutes:
         origin here) for the agent to ask about, never auto-substituted into the
         results. LHR (the destination) has no airport doc configured in this test,
         so near_destination stays empty — confirming the two sides are kept separate."""
-        mock_store = self._mock_session_with_routes(
-            [],
-            airport_candidates=[
-                {"iata": "WAW", "city": "Warsaw", "country": "PL", "coordinates": {"lat": 52.1657, "lng": 20.9671}}
-            ],
-        )
+        waw_candidate = {
+            "iata": "WAW",
+            "city": "Warsaw",
+            "country": "PL",
+            "coordinates": {"lat": 52.1657, "lng": 20.9671},
+        }
+        mock_store = self._mock_session_with_routes([], airport_candidates=[waw_candidate])
         krk_doc = {
             "iata": "KRK",
             "coordinates": {"lat": 50.0777, "lng": 19.7848},
@@ -170,12 +173,20 @@ class TestSearchRoutes:
         """The vector search query must exclude the origin airport from its own
         candidate list, even if the (mocked) vector search would otherwise
         return it as a "candidate" (trivially, itself is maximally similar)."""
+        krk_candidate = {
+            "iata": "KRK",
+            "city": "Krakow",
+            "country": "PL",
+            "coordinates": {"lat": 50.0777, "lng": 19.7848},
+        }
+        waw_candidate = {
+            "iata": "WAW",
+            "city": "Warsaw",
+            "country": "PL",
+            "coordinates": {"lat": 52.1657, "lng": 20.9671},
+        }
         mock_store = self._mock_session_with_routes(
-            [],
-            airport_candidates=[
-                {"iata": "KRK", "city": "Krakow", "country": "PL", "coordinates": {"lat": 50.0777, "lng": 19.7848}},
-                {"iata": "WAW", "city": "Warsaw", "country": "PL", "coordinates": {"lat": 52.1657, "lng": 20.9671}},
-            ],
+            [], airport_candidates=[krk_candidate, waw_candidate]
         )
         krk_doc = {
             "iata": "KRK",
@@ -231,12 +242,13 @@ class TestSearchRoutes:
         same empty list for both sides) — falls through to the vector-search nearby
         lookup, same as the no-hub-and-no-nearby-data case, but here with real
         candidate data configured so nearby_alternatives is actually populated."""
-        mock_store = self._mock_session_with_routes(
-            [],
-            airport_candidates=[
-                {"iata": "WAW", "city": "Warsaw", "country": "PL", "coordinates": {"lat": 52.1657, "lng": 20.9671}}
-            ],
-        )
+        waw_candidate = {
+            "iata": "WAW",
+            "city": "Warsaw",
+            "country": "PL",
+            "coordinates": {"lat": 52.1657, "lng": 20.9671},
+        }
+        mock_store = self._mock_session_with_routes([], airport_candidates=[waw_candidate])
         krk_doc = {
             "iata": "KRK",
             "coordinates": {"lat": 50.0777, "lng": 19.7848},
@@ -422,16 +434,12 @@ class TestSearchRoutes:
         ]
         mock_store = self._mock_session_with_routes(routes)
         now = datetime.now(timezone.utc).isoformat()
-        leg_docs = {
-            f"routes/AAA-HUB{i}": {"typical_price": {"min": 100.0 + i, "max": 150.0}, "last_updated": now}
-            for i in range(3)
-        }
-        leg_docs.update(
-            {
-                f"routes/HUB{i}-BBB": {"typical_price": {"min": 80.0 + i, "max": 120.0}, "last_updated": now}
-                for i in range(3)
-            }
-        )
+
+        def _leg(min_price: float) -> dict:
+            return {"typical_price": {"min": min_price, "max": min_price + 50}, "last_updated": now}
+
+        leg_docs = {f"routes/AAA-HUB{i}": _leg(100.0 + i) for i in range(3)}
+        leg_docs.update({f"routes/HUB{i}-BBB": _leg(80.0 + i) for i in range(3)})
         mock_store.open_session.return_value.load.side_effect = lambda key: leg_docs.get(key)
 
         with (
@@ -444,7 +452,7 @@ class TestSearchRoutes:
         result_json = json.dumps(result)
         estimated_tokens = len(result_json) // 4
         assert estimated_tokens <= WARN_TOOL_TOKENS, (
-            f"connecting_hubs result is ~{estimated_tokens} tokens — exceeds {WARN_TOOL_TOKENS}-token budget"
+            f"connecting_hubs result ~{estimated_tokens} tokens exceeds {WARN_TOOL_TOKENS} budget"
         )
 
 
@@ -588,7 +596,10 @@ class TestSaveConversation:
         mock_session.__enter__ = MagicMock(return_value=mock_session)
         mock_session.__exit__ = MagicMock(return_value=False)
         mock_session.load.return_value = existing_doc
-        mock_session.store = MagicMock(side_effect=lambda data, key: stored_docs.__setitem__(key, data))
+        def _record_store(data, key):
+            stored_docs[key] = data
+
+        mock_session.store = MagicMock(side_effect=_record_store)
         mock_session.advanced.get_metadata_for.return_value = MagicMock()
 
         mock_store = MagicMock()
@@ -647,7 +658,10 @@ class TestUpdateUserProfile:
         mock_session.__enter__ = MagicMock(return_value=mock_session)
         mock_session.__exit__ = MagicMock(return_value=False)
         mock_session.load.return_value = existing_doc
-        mock_session.store = MagicMock(side_effect=lambda data, key: stored_docs.__setitem__(key, data))
+        def _record_store(data, key):
+            stored_docs[key] = data
+
+        mock_session.store = MagicMock(side_effect=_record_store)
         mock_session.advanced.get_metadata_for.return_value = MagicMock()
 
         mock_store = MagicMock()

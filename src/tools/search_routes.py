@@ -125,13 +125,15 @@ def _connecting_hub_candidates(store, origin: str, destination: str) -> list[dic
     never mixed into `hidden_city`.
     """
     with store.open_session() as session:
+        origin_query = session.query_collection("Routes").where_equals("origin", origin)
+        destination_query = session.query_collection("Routes").where_equals(
+            "destination", destination
+        )
         from_origin = {
-            doc_to_dict(r).get("destination")
-            for r in session.query_collection("Routes").where_equals("origin", origin).take(_HUB_JOIN_FETCH)
+            doc_to_dict(r).get("destination") for r in origin_query.take(_HUB_JOIN_FETCH)
         }
         to_destination = {
-            doc_to_dict(r).get("origin")
-            for r in session.query_collection("Routes").where_equals("destination", destination).take(_HUB_JOIN_FETCH)
+            doc_to_dict(r).get("origin") for r in destination_query.take(_HUB_JOIN_FETCH)
         }
         hub_codes = (from_origin & to_destination) - {origin, destination, None}
         if not hub_codes:
@@ -153,7 +155,9 @@ def _connecting_hub_candidates(store, origin: str, destination: str) -> list[dic
                     "leg1_price_usd": leg1_price,
                     "leg2_price_usd": leg2_price,
                     "total_price_usd_min": round(leg1_price["min"] + leg2_price["min"], 2),
-                    "stale": _is_stale(leg1.get("last_updated")) or _is_stale(leg2.get("last_updated")),
+                    "stale": (
+                        _is_stale(leg1.get("last_updated")) or _is_stale(leg2.get("last_updated"))
+                    ),
                 }
             )
 

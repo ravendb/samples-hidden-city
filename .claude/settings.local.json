@@ -23,7 +23,21 @@
       "Bash(python -m pytest tests/integration/ --require-ravendb -q)",
       "Bash(curl -s -X DELETE \"http://localhost:8080/admin/databases\" -H \"Content-Type: application/json\" -d '{\"DatabaseNames\":[\"hidden-city-test\"],\"HardDelete\":true}')",
       "Bash(curl -s \"http://localhost:8080/databases\")",
-      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\([db['Name'] for db in d['Databases']]\\)\")"
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\([db['Name'] for db in d['Databases']]\\)\")",
+      "Bash(.venv/Scripts/python.exe -m pip install --quiet build)",
+      "Bash(.venv/Scripts/python.exe -m build --wheel --outdir /tmp/wheelcheck .)",
+      "Bash(rm -rf /tmp/wheelcheck)",
+      "Bash(\"c:/Users/weronika.kolodziej/samples-hidden-city/.venv/Scripts/python.exe\" -m zipfile -l /tmp/wheelcheck/hidden_city-0.1.0-py3-none-any.whl)",
+      "Bash(python -m ruff check tests/unit/test_tools.py --output-format concise)",
+      "PowerShell(helm list -A)",
+      "PowerShell(kubectl get pods -n ravendb-operator-system)",
+      "PowerShell(kubectl get pods -n hidden-city)",
+      "Bash(helm repo *)",
+      "Bash(helm search *)",
+      "Bash(mkdir -p /tmp/chartpull)",
+      "Read(//tmp/**)",
+      "Bash(/c/Users/weronika.kolodziej/AppData/Local/Microsoft/WinGet/Packages/Helm.Helm_Microsoft.Winget.Source_8wekyb3d8bbwe/windows-amd64/helm.exe pull *)",
+      "Read(//c/Users/weronika.kolodziej/AppData/Local/Temp/chartpull/ravendb-cluster/templates/**)"
     ],
     "additionalDirectories": [
       "C:\\Users\\WERONI~1.KOL\\AppData\\Local\\Temp\\claude\\c--Users-weronika-kolodziej-samples-hidden-city\\a9863e36-55e1-40a8-aaf7-9f57959c99d1\\scratchpad\\certtest"
