@@ -35,7 +35,7 @@ def _is_stale(last_updated_str: str | None) -> bool:
 _CHECKED_BAGGAGE_MULTIPLIER = 0.2  # mirrors RiskFactor.CHECKED_BAGGAGE in scorer.py
 _MAX_FETCH_BUFFER = 30  # cap on how many extra docs we pull when post-filtering
 
-_NEARBY_MIN_SIMILARITY = 0.95  # ~2000km cutoff, see src/db/geo.py docstring
+_NEARBY_MIN_SIMILARITY = 0.9989  # ~300km cutoff, see src/db/geo.py docstring
 _NEARBY_CANDIDATES = 20
 _NEARBY_MAX_RESULTS = 3
 

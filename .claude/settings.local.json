@@ -37,7 +37,9 @@
       "Bash(mkdir -p /tmp/chartpull)",
       "Read(//tmp/**)",
       "Bash(/c/Users/weronika.kolodziej/AppData/Local/Microsoft/WinGet/Packages/Helm.Helm_Microsoft.Winget.Source_8wekyb3d8bbwe/windows-amd64/helm.exe pull *)",
-      "Read(//c/Users/weronika.kolodziej/AppData/Local/Temp/chartpull/ravendb-cluster/templates/**)"
+      "Read(//c/Users/weronika.kolodziej/AppData/Local/Temp/chartpull/ravendb-cluster/templates/**)",
+      "Bash(kubectl get *)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(list\\(d.keys\\(\\)\\)\\)\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\WERONI~1.KOL\\AppData\\Local\\Temp\\claude\\c--Users-weronika-kolodziej-samples-hidden-city\\a9863e36-55e1-40a8-aaf7-9f57959c99d1\\scratchpad\\certtest"

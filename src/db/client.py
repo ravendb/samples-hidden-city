@@ -1,9 +1,26 @@
 import os
 from typing import Optional
 
+import OpenSSL.crypto
 from ravendb import DocumentStore
 
 _store: Optional[DocumentStore] = None
+
+
+def _pfx_to_pem(pfx_path: str, pem_path: str) -> str:
+    """Convert a PKCS#12 client certificate (as issued by RavenDB's own setup
+    wizard — see k8s/ravendb/values.yaml) to the combined cert+key PEM file
+    the ravendb client's certificate_pem_path expects. Idempotent: skips the
+    conversion if pem_path is already there from a previous call in this pod's
+    lifetime."""
+    if os.path.exists(pem_path):
+        return pem_path
+    with open(pfx_path, "rb") as f:
+        p12 = OpenSSL.crypto.load_pkcs12(f.read(), b"")
+    with open(pem_path, "wb") as f:
+        f.write(OpenSSL.crypto.dump_privatekey(OpenSSL.crypto.FILETYPE_PEM, p12.get_privatekey()))
+        f.write(OpenSSL.crypto.dump_certificate(OpenSSL.crypto.FILETYPE_PEM, p12.get_certificate()))
+    return pem_path
 
 
 def get_store() -> DocumentStore:
@@ -12,6 +29,15 @@ def get_store() -> DocumentStore:
         url = os.environ["RAVENDB_URL"]
         database = os.environ["RAVENDB_DATABASE"]
         _store = DocumentStore(urls=[url], database=database)
+
+        client_cert_pfx = os.environ.get("RAVENDB_CLIENT_CERT_PATH")
+        if client_cert_pfx:
+            _store.certificate_pem_path = _pfx_to_pem(client_cert_pfx, "/tmp/ravendb-client.pem")
+
+        ca_cert = os.environ.get("RAVENDB_CA_CERT_PATH")
+        if ca_cert:
+            _store.trust_store_path = ca_cert
+
         _store.initialize()
     return _store
 

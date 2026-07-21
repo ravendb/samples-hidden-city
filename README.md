@@ -82,6 +82,7 @@ Price drops → RavenDB Subscription ──push──▶ Worker → alert
 | **Kubernetes Operator** | `k8s/operator/` | 3-node cluster declared as a CRD; scaling, failover, TLS handled automatically |
 | **Document Expiration** | [`src/db/expiration.py`](src/db/expiration.py) | Price fields auto-expire after 20 min via `@expires` metadata — no manual TTL management |
 | **Attachments** | `src/tools/user_attachments.py`, `/profile` UI | Passport scan, bag photo, preference sheet (PDF) stored as binary blobs on the user doc — not indexed, retrieved whole, never inflating a query |
+| **Vector Search** | [`src/tools/search_routes.py`](src/tools/search_routes.py#L61-L113), [`src/db/geo.py`](src/db/geo.py) | Finds nearby-airport alternatives (~300 km radius) when no route is cached — one in-cluster query, no external geocoder, no separate vector store |
 
 **How Document Expiration works here:**
 - [`ensure_expiration_enabled()`](src/db/expiration.py#L57-L58) turns the
@@ -154,6 +155,34 @@ sweep frequency.
   queryable preference fields that flow into every chat turn's context, and
   arbitrarily large binary documents that stay out of that path entirely,
   fetched whole only when explicitly requested.
+
+**How Vector Search works here:**
+- Every `airports/{IATA}` document carries a `location_vector` — its
+  (lat, lng) projected onto a 3D unit sphere via
+  [`to_unit_vector()`](src/db/geo.py#L17-L23). Raw (lat, lng) cosine similarity
+  is the wrong metric for great-circle distance (longitude wraps at ±180°,
+  latitude sign flips don't mean "far apart"); on the unit-sphere projection,
+  cosine similarity equals `cos(angular separation)`, which is directly
+  proportional to great-circle distance with no antimeridian/pole
+  discontinuity.
+- When [`search_routes`](src/tools/search_routes.py) finds no direct or
+  connecting-hub route, [`_nearby_alternatives()`](src/tools/search_routes.py#L61-L113)
+  runs a `.vector_search("location_vector", ...)` query against the `Airports`
+  collection with `minimum_similarity=0.9989` (~300 km cutoff), then sorts the
+  candidates by exact `haversine_km()` distance and returns the closest 3 —
+  checked on both the origin and destination side independently, so the agent
+  never guesses which side is actually disconnected.
+- These are only ever offered as a question ("try WMI instead of WAW?") —
+  never substituted automatically into a search.
+
+**Where the savings are:**
+This is the same story as [`docs/architecture.md`](docs/architecture.md), applied to
+geography instead of price data. Instead of maintaining a hand-curated
+"nearby airports" table (a separate lookup that needs its own upkeep as
+airports are added), RavenDB answers it with one vector query, locally, inside
+the cluster. Zero extra calls to an external geocoding API, and zero separate
+vector store (the pgvector box in Stage 3) — it's the same store already
+holding route and session documents.
 
 ---
 
