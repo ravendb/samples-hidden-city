@@ -7,15 +7,16 @@ import logging
 import os
 from pathlib import Path
 
-from pyravendb.commands.commands_data import PutDocumentCommand
-from pyravendb.raven_operations.server_operations import CreateDatabaseOperation
+from ravendb import CreateDatabaseOperation
+from ravendb.exceptions.raven_exceptions import ConcurrencyException
+from ravendb.serverwide.database_record import DatabaseRecord
 
-from src.db.client import get_store
+from src.db.client import get_store, put_document
 from src.db.expiration import ensure_expiration_enabled
+from src.db.geo import to_unit_vector
 from src.db.models import (
     AirportDocument,
     Coordinates,
-    NearbyAirport,
     RouteDocument,
     TypicalPrice,
 )
@@ -49,14 +50,10 @@ FIXTURE_ROUTES = [
 def ensure_database(store) -> None:
     db_name = os.environ["RAVENDB_DATABASE"]
     try:
-        store.maintenance.server.send(CreateDatabaseOperation(db_name))
+        store.maintenance.server.send(CreateDatabaseOperation(DatabaseRecord(db_name)))
         log.info("Created database '%s'", db_name)
-    except Exception as e:
-        msg = str(e).lower()
-        if "already exist" in msg or "concurrency" in msg:
-            pass
-        else:
-            raise
+    except ConcurrencyException:
+        pass
 
     ensure_expiration_enabled(store)
 
@@ -68,19 +65,19 @@ def seed_airports(store) -> int:
         return 0
 
     airports = json.loads(airports_file.read_text())
-    executor = store.get_request_executor()
     for raw in airports:
+        coordinates = Coordinates(**raw["coordinates"])
         doc = AirportDocument(
             iata=raw["iata"],
             name=raw["name"],
             city=raw["city"],
             country=raw["country"],
-            coordinates=Coordinates(**raw["coordinates"]),
-            nearby=[NearbyAirport(**n) for n in raw.get("nearby", [])],
+            coordinates=coordinates,
+            location_vector=to_unit_vector(coordinates.lat, coordinates.lng),
         )
         data = doc.model_dump(mode="json")
         data["@metadata"] = {"@collection": "Airports"}
-        executor.execute(PutDocumentCommand(key=doc.airport_id(), document=data))
+        put_document(store, doc.airport_id(), data)
 
     return len(airports)
 
@@ -101,11 +98,10 @@ def seed_routes(store) -> int:
     ]
     enriched = enrich_hidden_city(routes)
 
-    executor = store.get_request_executor()
     for route in enriched:
         data = route.model_dump(mode="json")
         data["@metadata"] = {"@collection": "Routes"}
-        executor.execute(PutDocumentCommand(key=route.route_id(), document=data))
+        put_document(store, route.route_id(), data)
 
     return len(enriched)
 
@@ -116,7 +112,7 @@ def seed_if_empty() -> None:
     ensure_database(store)
 
     with store.open_session() as session:
-        existing_airports = list(session.query(collection_name="Airports").take(1))
+        existing_airports = list(session.query_collection("Airports").take(1))
 
     if not existing_airports:
         print("  DB: seeding airports...", flush=True)
@@ -126,7 +122,7 @@ def seed_if_empty() -> None:
         print("  DB: airports already seeded — skipping", flush=True)
 
     with store.open_session() as session:
-        existing_routes = list(session.query(collection_name="Routes").take(1))
+        existing_routes = list(session.query_collection("Routes").take(1))
 
     if not existing_routes:
         print("  DB: seeding fixture routes...", flush=True)
@@ -140,12 +136,12 @@ def seed_if_empty() -> None:
 
 def _count_routes(store) -> int:
     with store.open_session() as session:
-        return len(list(session.query(collection_name="Routes")))
+        return len(list(session.query_collection("Routes")))
 
 
 def _count_hidden(store) -> int:
     with store.open_session() as session:
         return len(list(
-            session.query(collection_name="Routes")
+            session.query_collection("Routes")
             .where_greater_than("hidden_city_score", 0.5)
         ))

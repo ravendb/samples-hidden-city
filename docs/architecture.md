@@ -283,30 +283,46 @@ raw response.
 
 ## Kubernetes Operator
 
-The `RavenDBCluster` CRD (in `k8s/ravendb/ravendb-cluster.yaml`) declares the
-desired cluster state. The RavenDB Kubernetes Operator reconciles it continuously:
+The `RavenDBCluster` CRD (chart values in `k8s/ravendb/values.yaml`, project:
+https://github.com/ravendb/ravendb-operator) declares the desired cluster
+state. The RavenDB Kubernetes Operator reconciles it continuously:
 
-- **Bootstrap** — generates TLS certificates, initialises the Raft cluster.
-- **Scaling** — adds or removes nodes while maintaining quorum (never drops below
-  (n/2)+1 live nodes during rolling changes).
-- **Upgrades** — rolls one node at a time, waits for Raft confirmation before
-  proceeding.
+- **Bootstrap** — a one-shot Job discovers the deployed RavenDB pods, wires up
+  certs, and forms the Raft cluster (first node becomes leader). Topology
+  (which nodes exist) is fixed after this runs — adding/removing nodes later
+  is a manual operation, not automatic reconciliation.
+- **Upgrades** — orchestrates rolling image upgrades node-by-node in the order
+  declared in the spec, with availability/ordering safety gates; halts on a
+  failed gate and resumes automatically once resolved; blocks downgrades.
 - **Admission webhooks** — reject invalid cluster configurations before they
-  are applied (e.g. reducing nodes below quorum).
+  are applied.
 
 ```yaml
-apiVersion: ravendb.com/v1alpha1
+apiVersion: ravendb.ravendb.io/v1
 kind: RavenDBCluster
 metadata:
   name: ravendb-cluster
   namespace: hidden-city
 spec:
-  nodes: 3
-  storage: 50Gi
-  tlsMode: ClusterExternalAccess
+  nodes:
+    - tag: a
+      publicServerUrl: https://a.hiddencity.local:443
+      publicServerUrlTcp: tcp://a-tcp.hiddencity.local:443
+    - tag: b
+      publicServerUrl: https://b.hiddencity.local:443
+      publicServerUrlTcp: tcp://b-tcp.hiddencity.local:443
+    - tag: c
+      publicServerUrl: https://c.hiddencity.local:443
+      publicServerUrlTcp: tcp://c-tcp.hiddencity.local:443
+  mode: None
+  storage:
+    data:
+      size: 50Gi
 ```
 
-One `kubectl apply` is all that is needed. The operator handles everything else.
+Deployed via Helm (`helm upgrade --install ravendb-cluster
+ravendb-operator/ravendb-cluster -f k8s/ravendb/values.yaml`), not a raw
+`kubectl apply` — the operator handles everything else after that.
 
 ---
 

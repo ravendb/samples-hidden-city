@@ -80,36 +80,58 @@ Price drops → RavenDB Subscription ──push──▶ Worker → alert
 | **Optimistic concurrency** | `src/tools/save_conversation.py` | Multiple agent replicas can update the same session doc safely |
 | **Data Subscriptions** | `src/worker/run.py` | Push-only price-drop alerts — no polling, no message broker needed |
 | **Kubernetes Operator** | `k8s/operator/` | 3-node cluster declared as a CRD; scaling, failover, TLS handled automatically |
-| **Document Expiration** | `src/db/expiration.py` | Price fields auto-expire after 20 min via `@expires` metadata — no manual TTL management |
+| **Document Expiration** | [`src/db/expiration.py`](src/db/expiration.py) | Price fields auto-expire after 20 min via `@expires` metadata — no manual TTL management |
 | **Attachments** | `src/tools/user_attachments.py`, `/profile` UI | Passport scan, bag photo, preference sheet (PDF) stored as binary blobs on the user doc — not indexed, retrieved whole, never inflating a query |
 
 **How Document Expiration works here:**
-- `ensure_expiration_enabled()` turns the feature on for the database once, at
-  startup (agent boot and scraper CronJob both call it — it's idempotent, so
-  whichever process starts first wins).
-- Every route document written by the bulk scraper (`src/scraper/run.py`) and
-  by the live-price cache-miss path (`src/tools/get_live_prices.py`) gets an
-  `@expires` timestamp 20 minutes in the future, computed by `expires_at()`.
-- RavenDB's background expiration process sweeps for expired documents every
-  60 seconds and deletes them server-side — no CronJob, no `DELETE WHERE`
-  query, no housekeeping code in this repo.
-- Net effect: stale prices disappear on their own. A cache read past its TTL
-  is a miss, not stale data — the agent falls through to `get_live_prices` and
-  the document is rewritten with a fresh 20-minute clock.
+- [`ensure_expiration_enabled()`](src/db/expiration.py#L57-L58) turns the
+  feature on for the database once, at startup — called from
+  [`src/db/seed.py:61`](src/db/seed.py#L61) (agent boot, via `seed_if_empty`)
+  and again from [`src/scraper/run.py:89`](src/scraper/run.py#L89) (scraper
+  CronJob). It's idempotent, so whichever process starts first wins. Under
+  the hood it sends a hand-rolled
+  [`ConfigureExpirationOperation`](src/db/expiration.py#L24-L49) — `pyravendb`
+  has no built-in one, so this is a thin `RavenCommand` against the same REST
+  endpoint (`/admin/expiration/config`) the official clients use.
+- Every route document written by the bulk scraper
+  ([`src/scraper/run.py:105`](src/scraper/run.py#L105)) and by the live-price
+  cache-miss path ([`src/tools/get_live_prices.py:140`](src/tools/get_live_prices.py#L140))
+  gets an `@expires` timestamp 20 minutes in the future, computed by
+  [`expires_at()`](src/db/expiration.py#L52-L54) —
+  [`PRICE_TTL_MINUTES = 20`](src/db/expiration.py#L16).
+- RavenDB's background expiration process deletes expired documents
+  server-side — no CronJob, no `DELETE WHERE` query, no housekeeping code in
+  this repo. The physical delete sweep runs every 36 hours here
+  ([`EXPIRATION_DELETE_FREQUENCY_SEC`](src/db/expiration.py#L18-L21)), because
+  the license on this instance rejects a configured frequency below that; the
+  `@expires` TTL still applies immediately at query time regardless of the
+  sweep interval, so a stale document is never *returned* even before it's
+  physically deleted.
+- Net effect: stale prices disappear on their own from a query standpoint the
+  moment their TTL passes. A cache read past its TTL is a miss, not stale
+  data — the agent falls through to `get_live_prices` and the document is
+  rewritten with a fresh 20-minute clock.
+- Covered by [`tests/unit/test_expiration.py`](tests/unit/test_expiration.py) —
+  asserts `expires_at()` returns a timestamp within the expected TTL window,
+  both for the default 20 minutes and a custom value.
 
 **What gets a TTL and what doesn't:**
 
 | Writer | Data | `@expires`? | Why |
 |--------|------|-------------|-----|
-| `src/scraper/run.py` (CronJob, bulk) | Scraped Travelpayouts prices | Yes, 20 min | Genuinely volatile — a fresh price is one `get_live_prices` call away |
-| `src/tools/get_live_prices.py` (cache miss) | Live Travelpayouts price | Yes, 20 min | Same reasoning — this *is* the live refresh path |
-| `src/db/seed.py` → `seed_routes()` | Hand-curated fixture routes with real `hubs` / `hidden_city_score` | **No** | These demonstrate the hidden-city scoring logic and have no live source to regenerate from — deleting them on a timer would silently break the demo until the next app restart reseeds them |
-| `src/db/seed.py` → `seed_airports()` | Airport reference data (IATA → city/country) | **No** | Static reference data, not a price |
+| [`src/scraper/run.py`](src/scraper/run.py#L105) (CronJob, bulk) | Scraped Travelpayouts prices | Yes, 20 min | Genuinely volatile — a fresh price is one `get_live_prices` call away |
+| [`src/tools/get_live_prices.py`](src/tools/get_live_prices.py#L140) (cache miss) | Live Travelpayouts price | Yes, 20 min | Same reasoning — this *is* the live refresh path |
+| [`src/db/seed.py`](src/db/seed.py) → `seed_routes()` | Hand-curated fixture routes with real `hubs` / `hidden_city_score` | **No** | These demonstrate the hidden-city scoring logic and have no live source to regenerate from — deleting them on a timer would silently break the demo until the next app restart reseeds them |
+| [`src/db/seed.py`](src/db/seed.py) → `seed_airports()` | Airport reference data (IATA → city/country) | **No** | Static reference data, not a price |
 
 Watch it happen: open RavenDB Studio's `Routes` collection, trigger a live price
 lookup for a route (e.g. ask the agent about a destination not in the fixtures),
-and that document disappears on its own ~20 minutes later — a good demo beat
-for "the database enforces its own freshness, nobody wrote a cleanup job."
+and inspect the document's `@expires` metadata — 20 minutes out from write time.
+Past that timestamp the document is stale from the agent's point of view even
+though it's still visible in Studio until the next 36-hour delete sweep — a
+good demo beat for "the database enforces its own freshness at query time,
+nobody wrote a cleanup job," paired with an honest note on the license-gated
+sweep frequency.
 
 **How Attachments work here:**
 - The Profile screen (`/profile`) lets a user upload a passport scan, a bag
@@ -217,8 +239,13 @@ covers the full cluster deployment.
 | **Docker** | 24+ | required | — | [docs.docker.com](https://docs.docker.com/get-docker/) |
 | **Docker Compose** | v2 (bundled with Docker Desktop) | required | — | bundled with Docker Desktop |
 | **kubectl** | 1.28+ | — | required | [kubernetes.io](https://kubernetes.io/docs/tasks/tools/) |
+| **helm** | 3.x | — | required | `winget install Helm.Helm` |
 | **kind** | latest | — | required (local) | `winget install Kubernetes.kind` |
 | **Kubernetes cluster** | 1.28+ | — | required | kind (local, see below) / cloud provider |
+
+cert-manager and ingress-nginx are prerequisites of the RavenDB Operator
+(https://github.com/ravendb/ravendb-operator) — `start-k8s.ps1` / `k8s/operator/install.sh`
+install both automatically, no separate step needed.
 
 > **Windows note:** Docker Desktop on Windows requires either WSL 2 or Hyper-V.
 > Make sure one of these is enabled before installing Docker.
@@ -288,15 +315,31 @@ uv pip list                       # list installed packages
 > wizard at `/setup` walks you through both — see
 > [Environment variables](#environment-variables) below if you'd rather set them manually.
 
+### Pick your mode
+
+`start.ps1` is the single entry point for both modes. Run it with no arguments
+and it asks which one you want:
+
+```powershell
+.\start.ps1
+#   [1] Local       - docker-compose, fastest to start
+#   [2] Kubernetes  - kind cluster + RavenDB Operator, full k8s demo
+```
+
+Or skip the prompt with `-Mode Local` / `-Mode K8s`. `-Mode K8s` hands off to
+`start-k8s.ps1` automatically (see [Kubernetes (local — kind)](#kubernetes-local--kind)
+below) — everything described there runs without any further manual steps,
+except the RavenDB cert/license secrets noted in that section.
+
 ### Local (docker-compose)
 
 The fastest way is the included start script — it handles `.env`, RavenDB health
 checks, seeding, and launching the agent in one command:
 
 ```powershell
-.\start.ps1             # RavenDB + seed + agent
-.\start.ps1 -Worker     # also starts the price-drop worker in a separate window
-.\start.ps1 -SkipSeed   # skip seeding when the database is already populated
+.\start.ps1 -Mode Local             # RavenDB + seed + agent
+.\start.ps1 -Mode Local -Worker     # also starts the price-drop worker in a separate window
+.\start.ps1 -Mode Local -SkipSeed   # skip seeding when the database is already populated
 ```
 
 Or step by step:
@@ -348,13 +391,34 @@ skipped and indirect routes keep `hubs: []` (score stays 0 for those until fixed
 ### Kubernetes (local — kind)
 
 The fastest way to run the full Kubernetes stack locally, including the RavenDB
-Operator, is the included `start-k8s.ps1` script. It creates a local
-[kind](https://kind.sigs.k8s.io/) cluster, installs the operator, builds and
-loads the Docker image, deploys everything, and sets up port-forwards — one command:
+Operator (https://github.com/ravendb/ravendb-operator), is `.\start.ps1 -Mode K8s`
+(or `start-k8s.ps1` directly). It creates a local [kind](https://kind.sigs.k8s.io/)
+cluster, installs cert-manager + ingress-nginx + the RavenDB Operator via Helm,
+builds and loads the Docker image, deploys everything, and sets up port-forwards
+— one command:
 
 ```powershell
-.\start-k8s.ps1
+.\start.ps1 -Mode K8s
 ```
+
+**One manual prerequisite — RavenDB TLS/license secrets.** Everything above is
+automated, but the self-signed cert material for the RavenDB cluster is *not*
+auto-generated (it needs to come from RavenDB's own Setup Wizard / setup
+package, not a generic openssl cert — see
+[examples/tls/selfsigned](https://github.com/ravendb/ravendb-operator/tree/main/examples/tls/selfsigned)
+in the operator repo). The script checks for four secrets in the `hidden-city`
+namespace and stops with the exact `kubectl create secret` commands if any are
+missing:
+
+| Secret | Key | Contents |
+|--------|-----|----------|
+| `ravendb-license` | `license.json` | Your RavenDB license |
+| `ravendb-cert` | `server.pfx` | Combined server cert covering all node hostnames |
+| `ravendb-ca-cert` | `ca.crt` | Root CA certificate |
+| `ravendb-client-cert` | `client.pfx` | ClusterAdmin client cert |
+
+Create these once, then re-run with `-SkipBuild -SkipOperator` to skip straight
+to the cluster deploy.
 
 After everything is ready:
 
@@ -364,11 +428,11 @@ After everything is ready:
 | `http://localhost:8000/docs` | Swagger UI |
 | `http://localhost:8080` | RavenDB Studio |
 
-Flags:
+Flags (forwarded from `start.ps1 -Mode K8s`, or pass directly to `start-k8s.ps1`):
 
 ```powershell
 .\start-k8s.ps1 -SkipBuild      # skip docker build (image already loaded into kind)
-.\start-k8s.ps1 -SkipOperator   # skip operator install (already installed)
+.\start-k8s.ps1 -SkipOperator   # skip cert-manager/ingress-nginx/operator install (already installed)
 .\start-k8s.ps1 -DeleteCluster  # delete the kind cluster and exit
 ```
 
@@ -379,6 +443,7 @@ runs with `-SkipBuild -SkipOperator` are fast (manifests reapplied, no rebuild).
 ```powershell
 winget install Kubernetes.kind
 winget install Kubernetes.kubectl
+winget install Helm.Helm
 ```
 Docker Desktop must be running.
 
@@ -396,15 +461,23 @@ kubectl describe ravendbclusters ravendb-cluster -n hidden-city
 ### Kubernetes (cloud / CI)
 
 ```bash
-# Install RavenDB Operator (one-time per cluster)
+# Install cert-manager + ingress-nginx + RavenDB Operator (one-time per cluster)
 bash k8s/operator/install.sh
 
-# Copy and fill in secrets
+# Create the RavenDB license/cert secrets referenced by k8s/ravendb/values.yaml
+# (ravendb-license, ravendb-cert, ravendb-ca-cert, ravendb-client-cert) — see
+# the "Kubernetes (local — kind)" section above for exact commands.
+
+# Copy and fill in app secrets (OpenAI key, etc.)
 cp k8s/secrets.yaml k8s/secrets.local.yaml
 # edit k8s/secrets.local.yaml
-
-# Deploy everything
 kubectl apply -f k8s/secrets.local.yaml
+
+# Deploy the RavenDB cluster (Helm, not kustomize)
+helm upgrade --install ravendb-cluster ravendb-operator/ravendb-cluster \
+  -n hidden-city --create-namespace -f k8s/ravendb/values.yaml
+
+# Deploy the rest of the app
 kubectl apply -k k8s/
 
 # Check status

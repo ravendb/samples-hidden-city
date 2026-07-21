@@ -109,7 +109,7 @@ def _load_conversation_context(user_id: str, session_id: str) -> tuple[list[dict
 
     prior_turns: list[dict] = []
     if session_raw is not None:
-        turns = doc_to_dict(session_raw).get("turns", [])[-10:]
+        turns = doc_to_dict(session_raw).get("turns", [])[-5:]
         prior_turns = [{"role": t["role"], "content": t["content"]} for t in turns]
 
     preferences = dict(DEFAULT_PREFERENCES)

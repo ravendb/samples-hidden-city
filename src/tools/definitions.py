@@ -9,16 +9,12 @@ TOOL_DEFINITIONS = [
         "function": {
             "name": "search_routes",
             "description": (
-                "Search RavenDB for flight routes. Supports direct and hidden city lookups. "
-                "Always call this before get_live_prices. Returns stale=true if data is >2h old. "
-                "budget_max, budget_currency, countries_of_interest, and carry_on_only are "
-                "auto-filled from the user's saved preferences if you omit them — only pass "
-                "them yourself to override for this one search. "
-                "If no routes are found, may return nearby_alternatives with two separate "
-                "lists — near_origin (alternative departure airports) and near_destination "
-                "(alternative arrival airports), each with airport/city/distance_km/train. "
-                "Neither has been searched — ask the user before searching one, never "
-                "substitute silently, and never mix up which list an airport came from."
+                "Search RavenDB for flight routes (direct or hidden city). Call before "
+                "get_live_prices. Returns stale=true if data is >2h old. budget_max, "
+                "budget_currency, countries_of_interest, carry_on_only auto-fill from saved "
+                "preferences unless overridden. May return nearby_alternatives (unsearched "
+                "near_origin/near_destination lists, each with airport/city/distance_km/"
+                "train) if no routes found — ask before searching one, never mix the lists."
             ),
             "parameters": {
                 "type": "object",
@@ -69,11 +65,11 @@ TOOL_DEFINITIONS = [
         "function": {
             "name": "get_live_prices",
             "description": (
-                "Fetch live price(s) from Travelpayouts. "
-                "Use when search_routes returns stale=true, no results, or has_schedule=false. "
-                "Pass destination for a single-route lookup. Omit destination for an "
-                "'anywhere from origin' search — returns the cheapest destinations found, "
-                "up to max_results. Returns price and departure date per route."
+                "Fetch live price(s) from Travelpayouts when search_routes returns "
+                "stale=true, no results, or has_schedule=false. Pass destination for a "
+                "single-route lookup, or omit it for an 'anywhere from origin' search "
+                "(cheapest destinations, up to max_results). Returns price and departure "
+                "date per route."
             ),
             "parameters": {
                 "type": "object",
@@ -115,12 +111,11 @@ TOOL_DEFINITIONS = [
         "function": {
             "name": "update_user_profile",
             "description": (
-                "Save durable user preferences to RavenDB. Call when the user expresses "
-                "a preference that should carry across sessions: their name, baggage style, "
-                "home/departure airports, countries or destinations they're interested in, "
-                "budget, preferred airlines, loyalty programs. List fields are merged with "
-                "what's already saved — pass only the new values just learned, not the full list. "
-                "Do NOT use for trip-specific constraints — use save_conversation for those."
+                "Save durable user preferences to RavenDB: name, baggage style, home/"
+                "departure airports, countries/destinations of interest, budget, preferred "
+                "airlines, loyalty programs. List fields merge with what's already saved — "
+                "pass only the new values just learned, not the full list. Not for "
+                "trip-specific constraints — use update_constraints for those."
             ),
             "parameters": {
                 "type": "object",

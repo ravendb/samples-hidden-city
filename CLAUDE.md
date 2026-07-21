@@ -230,23 +230,41 @@ See @docs/hidden-city.md for full spec. Summary:
 
 ## Kubernetes Operator
 
-The `RavenDBCluster` CRD is the contract. The Operator is the enforcer.
+The `RavenDBCluster` CRD (from https://github.com/ravendb/ravendb-operator) is
+the contract. The Operator is the enforcer. Installed via Helm — see
+`k8s/operator/install.sh` — not applied as a raw manifest.
 
 ```yaml
-apiVersion: ravendb.com/v1alpha1
+apiVersion: ravendb.ravendb.io/v1
 kind: RavenDBCluster
 metadata:
   name: ravendb-cluster
 spec:
-  nodes: 3
-  storage: 50Gi
-  tlsMode: ClusterExternalAccess
+  nodes:
+    - tag: a
+      publicServerUrl: https://a.hiddencity.local:443
+      publicServerUrlTcp: tcp://a-tcp.hiddencity.local:443
+    - tag: b
+      publicServerUrl: https://b.hiddencity.local:443
+      publicServerUrlTcp: tcp://b-tcp.hiddencity.local:443
+    - tag: c
+      publicServerUrl: https://c.hiddencity.local:443
+      publicServerUrlTcp: tcp://c-tcp.hiddencity.local:443
+  mode: None  # self-signed via *CertSecretRef fields; use LetsEncrypt for a public demo
+  storage:
+    data:
+      size: 50Gi
 ```
 
-The Operator handles: bootstrapping, certificate wiring, rolling node upgrades
-with Raft quorum gates (never loses quorum during upgrade), and continuous
-reconciliation against declared state. Admission webhooks block invalid configs
-before any damage is done.
+See `k8s/ravendb/values.yaml` for the full chart values (cert/license secret
+refs, ingress config) actually used to deploy this cluster.
+
+The Operator handles: bootstrapping (via a one-shot cluster-bootstrapper Job),
+certificate wiring, rolling node upgrades with safety gates (node-by-node,
+halts on failed gates, resumes automatically once fixed, blocks downgrades),
+and continuous reconciliation against declared state. Admission webhooks block
+invalid configs before any damage is done. Note: initial node topology is fixed
+at bootstrap — adding/removing nodes later is a manual operation, not automatic.
 
 Contact Omer for operator internals — he wrote it.
 

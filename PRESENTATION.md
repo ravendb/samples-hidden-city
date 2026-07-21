@@ -64,16 +64,24 @@ Kafka/Celery — RavenDB Subscriptions pushują na zmianę dokumentu
 Infra miesięcznie: $90 zamiast $1190.
 
 OPERATOR (~1 min)
-Jak to działa na k8s? Jeden YAML:
+Jak to działa na k8s? Jeden plik values dla Helm chartu (ravendb-operator/ravendb-cluster, https://github.com/ravendb/ravendb-operator):
 
 
-apiVersion: ravendb.com/v1alpha1
+apiVersion: ravendb.ravendb.io/v1
 kind: RavenDBCluster
 spec:
-  nodes: 3
-  storage: 50Gi
-  tlsMode: ClusterExternalAccess
-kubectl apply i gotowe. Operator bootstrapuje klaster, generuje certyfikaty TLS, zarządza Raft quorum podczas rolling upgrades — nigdy nie schodzi poniżej (n/2)+1 żywych nodów. Admission webhooks blokują nieprawidłowe konfiguracje zanim cokolwiek się stanie.
+  nodes:
+    - tag: a
+      publicServerUrl: https://a.hiddencity.local:443
+    - tag: b
+      publicServerUrl: https://b.hiddencity.local:443
+    - tag: c
+      publicServerUrl: https://c.hiddencity.local:443
+  mode: None
+  storage:
+    data:
+      size: 50Gi
+helm install i gotowe. Operator bootstrapuje klaster (jednorazowy Job), generuje/wpina certyfikaty TLS, zarządza rolling upgrade node-po-node z safety gates (zatrzymuje się na błędzie, wznawia automatycznie po naprawie, blokuje downgrade). Admission webhooks blokują nieprawidłowe konfiguracje zanim cokolwiek się stanie. Uwaga: topologia węzłów (ile ich jest) jest ustalana przy bootstrapie — dodanie/usunięcie węzła później to operacja ręczna, nie automatyczna.
 
 ZAMKNIĘCIE (~1 min)
 Inference zostawiliśmy na zewnątrz — OpenAI API — żeby pokazać, że oszczędności są wyłącznie z kontekstu. Nie z tego, gdzie liczy model. Z tego, co przestajemy wysyłać.

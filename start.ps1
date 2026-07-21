@@ -1,17 +1,52 @@
-# start.ps1 -- starts the full local stack in one command
+# start.ps1 -- single entry point: pick Local (docker-compose) or Kubernetes, then run it
 #
 # Usage:
-#   .\start.ps1             # RavenDB + seed + agent
-#   .\start.ps1 -Worker     # also starts the price-drop worker in a separate window
-#   .\start.ps1 -SkipSeed   # skip seeding when the database is already populated
+#   .\start.ps1                    # prompts: [1] Local  [2] Kubernetes
+#   .\start.ps1 -Mode Local        # skip the prompt, run the local docker-compose stack
+#   .\start.ps1 -Mode K8s          # skip the prompt, run the kind/operator stack (start-k8s.ps1)
+#   .\start.ps1 -Worker            # (Local) also start the price-drop worker in a separate window
+#   .\start.ps1 -SkipSeed          # (Local) skip seeding when the database is already populated
+#   .\start.ps1 -Mode K8s -SkipBuild -SkipOperator   # (K8s) forwarded to start-k8s.ps1
+#   .\start.ps1 -DeleteCluster      # (K8s) delete the kind cluster and exit
 
 param(
-    [switch]$Worker,    # start the subscription worker in a separate window
-    [switch]$SkipSeed   # skip seed_local (when the database is already seeded)
+    [ValidateSet("Local", "K8s", "")]
+    [string]$Mode = "",
+    [switch]$Worker,        # (Local) start the subscription worker in a separate window
+    [switch]$SkipSeed,      # (Local) skip seed_local (when the database is already seeded)
+    [switch]$SkipBuild,     # (K8s) skip docker build, forwarded to start-k8s.ps1
+    [switch]$SkipOperator,  # (K8s) skip operator install, forwarded to start-k8s.ps1
+    [switch]$DeleteCluster, # (K8s) delete the kind cluster and exit, forwarded to start-k8s.ps1
+    [string]$ClusterName = "hidden-city"
 )
 
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
+
+# --- k8s cluster teardown shortcut (no mode picker needed) ---
+if ($DeleteCluster) {
+    & "$root\start-k8s.ps1" -DeleteCluster -ClusterName $ClusterName
+    exit $LASTEXITCODE
+}
+
+# --- pick Local vs Kubernetes ---
+if (-not $Mode) {
+    Write-Host ""
+    Write-Host "  How do you want to run this demo?" -ForegroundColor Cyan
+    Write-Host "    [1] Local       - docker-compose, fastest to start" -ForegroundColor Gray
+    Write-Host "    [2] Kubernetes  - kind cluster + RavenDB Operator, full k8s demo" -ForegroundColor Gray
+    Write-Host ""
+    $choice = Read-Host "  Enter 1 or 2 (default: 1)"
+    $Mode = if ($choice -eq "2") { "K8s" } else { "Local" }
+}
+
+if ($Mode -eq "K8s") {
+    Write-Host "`n  Kubernetes mode selected -- handing off to start-k8s.ps1`n" -ForegroundColor Cyan
+    & "$root\start-k8s.ps1" -SkipBuild:$SkipBuild -SkipOperator:$SkipOperator -ClusterName $ClusterName
+    exit $LASTEXITCODE
+}
+
+Write-Host "`n  Local mode selected -- docker-compose stack`n" -ForegroundColor Cyan
 
 function Write-Step($n, $total, $msg) {
     Write-Host "`n[$n/$total] $msg" -ForegroundColor Cyan

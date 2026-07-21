@@ -4,7 +4,10 @@
       "Bash(python -m pytest tests/unit/test_loop.py -v)",
       "Bash(uv run *)",
       "Bash(.venv\\\\Scripts\\\\python.exe -m pytest tests/unit/test_loop.py -v)",
-      "PowerShell(.venv\\\\Scripts\\\\python.exe -m pytest tests/unit/test_loop.py -v)"
+      "PowerShell(.venv\\\\Scripts\\\\python.exe -m pytest tests/unit/test_loop.py -v)",
+      "Bash(curl -sf http://localhost:8080/setup/alive)",
+      "Bash(.venv/Scripts/python -m scripts.measure_tokens)",
+      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python -m scripts.measure_tokens)"
     ]
   }
 }

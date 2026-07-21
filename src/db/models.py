@@ -9,12 +9,6 @@ class Coordinates(BaseModel):
     lng: float
 
 
-class NearbyAirport(BaseModel):
-    iata: str
-    distance_km: int
-    train: bool
-
-
 class TypicalPrice(BaseModel):
     min: float
     max: float
@@ -53,7 +47,9 @@ class AirportDocument(BaseModel):
     city: str
     country: str
     coordinates: Coordinates
-    nearby: list[NearbyAirport] = Field(default_factory=list)
+    # 3D unit vector (great-circle projection of lat/lng) — powers vector_search-based
+    # "nearby airport" lookups in search_routes.py. See src/db/geo.py::to_unit_vector.
+    location_vector: list[float] = Field(default_factory=list)
 
     def airport_id(self) -> str:
         return f"airports/{self.iata}"

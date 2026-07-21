@@ -1,6 +1,6 @@
 services:
   ravendb:
-    image: ravendb/ravendb:latest
+    image: ravendb/ravendb:7.2-latest
     ports:
       - "8080:8080"
       - "38888:38888"

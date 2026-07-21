@@ -22,9 +22,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
-from pyravendb.commands.commands_data import PutDocumentCommand
 
-from src.db.client import doc_to_dict, get_store, load_airport_names
+from src.db.client import doc_to_dict, get_store, load_airport_names, put_document
 from src.db.expiration import expires_at
 from src.db.models import RouteDocument, TypicalPrice
 

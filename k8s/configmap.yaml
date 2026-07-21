@@ -4,8 +4,10 @@ metadata:
   name: hidden-city-config
   namespace: hidden-city
 data:
-  # ravendb-cluster-svc = ClusterIP service the operator creates for the RavenDBCluster.
-  # Switch to https://ravendb-cluster-svc:443 when tlsMode=ClusterExternalAccess.
+  # ravendb-cluster-svc is a placeholder — verify the actual in-cluster Service
+  # name/port the ravendb-operator/ravendb-cluster chart creates for this release
+  # via `kubectl get svc -n hidden-city` once it's deployed (see k8s/ravendb/values.yaml,
+  # mode: None means TLS is on, so this should likely be https://... not http).
   RAVENDB_URL: "http://ravendb-cluster-svc:8080"
   RAVENDB_DATABASE: "hidden-city"
   LLM_MODEL: "gpt-4o-mini"

@@ -1,7 +1,7 @@
 import os
 from typing import Optional
 
-from pyravendb.store.document_store import DocumentStore
+from ravendb import DocumentStore
 
 _store: Optional[DocumentStore] = None
 
@@ -20,8 +20,21 @@ def reset_store() -> None:
     """For tests only — force a new store on next get_store() call."""
     global _store
     if _store is not None:
-        _store.dispose()
+        _store.close()
         _store = None
+
+
+def put_document(store: DocumentStore, key: str, data: dict) -> None:
+    """Writes `data` (a plain dict, typically from `model.model_dump(mode='json')`)
+    under `key`. `data` may carry an `@metadata` key (e.g. {"@collection": ...,
+    "@expires": ...}) — those fields are moved onto the session's real metadata
+    object before saving, since the modern client's session.store() doesn't read
+    metadata out of the document body the way the old PutDocumentCommand did."""
+    metadata_overrides = data.pop("@metadata", {})
+    with store.open_session() as session:
+        session.store(data, key)
+        session.advanced.get_metadata_for(data).update(metadata_overrides)
+        session.save_changes()
 
 
 def load_airport_names(store: DocumentStore, codes: list[str]) -> dict[str, dict]:
@@ -45,7 +58,7 @@ def load_airport_names(store: DocumentStore, codes: list[str]) -> dict[str, dict
 
 
 def doc_to_dict(obj) -> dict:
-    """Recursively convert a pyravendb _DynamicStructure (or plain dict) to a plain dict."""
+    """Recursively convert a RavenDB dynamic document object (or plain dict) to a plain dict."""
     if isinstance(obj, dict):
         return {k: doc_to_dict(v) for k, v in obj.items()}
     if isinstance(obj, list):
