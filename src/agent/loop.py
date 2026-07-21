@@ -14,7 +14,7 @@ from typing import AsyncGenerator
 from openai import AsyncOpenAI
 
 from src.agent.prompts import SYSTEM_PROMPT
-from src.tools.definitions import TOOL_DEFINITIONS
+from src.tools.definitions import select_tools
 from src.tools.dispatcher import dispatch_tool
 
 log = logging.getLogger(__name__)
@@ -22,7 +22,8 @@ log = logging.getLogger(__name__)
 _DEFAULT_MODEL = "gpt-4o-mini"
 MAX_RESPONSE_TOKENS = 400
 MAX_ITERATIONS = 10
-WARN_TOOL_TOKENS = 800  # log a warning when tool results exceed this
+WARN_TOOL_TOKENS = 800  # tool-result budget for the WHOLE turn, not per call — see
+# how tool_tokens_used is threaded through run_agent/stream_agent below
 
 # Numbers with 2+ digits — catches prices/scores but not stray single digits ("1 stop").
 _NUMBER_RE = re.compile(r"\d{2,}(?:[.,]\d+)?")
@@ -129,6 +130,7 @@ async def run_agent(
     """
     client = AsyncOpenAI()
     system_content = _build_system_content(user_id, session_id, preferences)
+    tools = select_tools(user_message)
     messages = (
         [{"role": "system", "content": system_content}]
         + prior_turns
@@ -138,6 +140,8 @@ async def run_agent(
     total_input = 0
     total_output = 0
     tool_calls = 0
+    tool_tokens_used = 0  # cumulative across the WHOLE turn — WARN_TOOL_TOKENS is
+    # a per-turn budget, not a per-call one; see _truncate_tool_result call below
     token_warnings: list[str] = []
     grounding_warnings: list[str] = []
     tool_result_texts: list[str] = []
@@ -150,7 +154,7 @@ async def run_agent(
         response = await client.chat.completions.create(
             model=os.getenv("LLM_MODEL", _DEFAULT_MODEL),
             max_tokens=MAX_RESPONSE_TOKENS,
-            tools=TOOL_DEFINITIONS,
+            tools=tools,
             tool_choice=tool_choice,
             messages=messages,
         )
@@ -213,11 +217,17 @@ async def run_agent(
                 result_json = json.dumps(result, default=str)
 
                 estimated = _estimate_tokens(result_json)
-                if estimated > WARN_TOOL_TOKENS:
-                    warning = f"{tc.function.name} result ~{estimated} tokens (budget {WARN_TOOL_TOKENS})"
+                remaining_budget = max(0, WARN_TOOL_TOKENS - tool_tokens_used)
+                if estimated > remaining_budget:
+                    warning = (
+                        f"{tc.function.name} result ~{estimated} tokens, only {remaining_budget} "
+                        f"left of this turn's {WARN_TOOL_TOKENS}-token tool budget"
+                    )
                     log.warning(warning)
                     token_warnings.append(warning)
-                    result_json = _truncate_tool_result(result_json)
+                    result_json = _truncate_tool_result(result_json, max_tokens=remaining_budget)
+                    estimated = _estimate_tokens(result_json)
+                tool_tokens_used += estimated
 
                 tool_result_texts.append(result_json)
                 tool_results.append({
@@ -241,12 +251,14 @@ async def stream_agent(
     """Streaming variant -- yields SSE-formatted strings for /chat/stream."""
     client = AsyncOpenAI()
     system_content = _build_system_content(user_id, session_id, preferences)
+    tools = select_tools(user_message)
     messages = (
         [{"role": "system", "content": system_content}]
         + prior_turns
         + [{"role": "user", "content": user_message}]
     )
     total_input, total_output, tool_calls_count = 0, 0, 0
+    tool_tokens_used = 0  # cumulative across the WHOLE turn — see run_agent
     tool_result_texts: list[str] = []
 
     def sse(data: dict) -> str:
@@ -263,7 +275,7 @@ async def stream_agent(
             model=os.getenv("LLM_MODEL", _DEFAULT_MODEL),
             max_tokens=MAX_RESPONSE_TOKENS,
             messages=messages,
-            tools=TOOL_DEFINITIONS,
+            tools=tools,
             tool_choice=tool_choice,
             stream=True,
             stream_options={"include_usage": True},
@@ -339,9 +351,18 @@ async def stream_agent(
                 tool_input = json.loads(tc["arguments"])
                 result = await dispatch_tool(tc["name"], tool_input, preferences=preferences)
                 result_json = json.dumps(result, default=str)
-                if _estimate_tokens(result_json) > WARN_TOOL_TOKENS:
-                    log.warning("%s result over budget in stream", tc["name"])
-                    result_json = _truncate_tool_result(result_json)
+
+                estimated = _estimate_tokens(result_json)
+                remaining_budget = max(0, WARN_TOOL_TOKENS - tool_tokens_used)
+                if estimated > remaining_budget:
+                    log.warning(
+                        "%s result ~%d tokens, only %d left of this turn's %d-token tool budget",
+                        tc["name"], estimated, remaining_budget, WARN_TOOL_TOKENS,
+                    )
+                    result_json = _truncate_tool_result(result_json, max_tokens=remaining_budget)
+                    estimated = _estimate_tokens(result_json)
+                tool_tokens_used += estimated
+
                 tool_result_texts.append(result_json)
                 tool_results.append({
                     "role": "tool",

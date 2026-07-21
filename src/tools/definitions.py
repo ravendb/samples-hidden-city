@@ -2,6 +2,7 @@
 OpenAI tool schemas for the agent's tools.
 Keep descriptions tight — they count against the token budget.
 """
+import re
 
 TOOL_DEFINITIONS = [
     {
@@ -9,16 +10,19 @@ TOOL_DEFINITIONS = [
         "function": {
             "name": "search_routes",
             "description": (
-                "Search RavenDB for flight routes (direct or hidden city). Call before "
-                "get_live_prices. Returns stale=true if data is >2h old. budget_max, "
-                "budget_currency, countries_of_interest, carry_on_only auto-fill from saved "
-                "preferences unless overridden. If no direct route is found, returns EITHER "
-                "connecting_hubs (up to 3 via-hub suggestions, each with leg1_price_usd, "
-                "leg2_price_usd, total_price_usd_min — two separately cached routes, NOT a "
-                "single fare and NOT a hidden city opportunity) OR nearby_alternatives "
-                "(unsearched near_origin/near_destination lists, each with airport/city/"
-                "country/distance_km, found via geographic proximity search) — never both. "
-                "Ask before searching a nearby_alternatives airport, never mix the two lists."
+                "Search RavenDB for flight routes (direct or hidden city). For a single "
+                "destination (or the hidden-city direct fare), this already refreshes "
+                "stale/missing data itself via Travelpayouts — you don't need to call "
+                "get_live_prices afterward for that pair; result still says stale=false once "
+                "refreshed. budget_max, budget_currency, countries_of_interest, carry_on_only "
+                "auto-fill from saved preferences unless overridden. If no direct route is "
+                "found, returns EITHER connecting_hubs (up to 3 via-hub suggestions, each with "
+                "leg1_price_usd, leg2_price_usd, total_price_usd_min — two separately cached "
+                "routes, NOT a single fare and NOT a hidden city opportunity) OR "
+                "nearby_alternatives (unsearched near_origin/near_destination lists, each with "
+                "airport/city/country/distance_km, found via geographic proximity search) — "
+                "never both. Ask before searching a nearby_alternatives airport, never mix the "
+                "two lists."
             ),
             "parameters": {
                 "type": "object",
@@ -69,11 +73,11 @@ TOOL_DEFINITIONS = [
         "function": {
             "name": "get_live_prices",
             "description": (
-                "Fetch live price(s) from Travelpayouts when search_routes returns "
-                "stale=true, no results, or has_schedule=false. Pass destination for a "
-                "single-route lookup, or omit it for an 'anywhere from origin' search "
-                "(cheapest destinations, up to max_results). Returns price and departure "
-                "date per route."
+                "Fetch live price(s) from Travelpayouts directly. search_routes already "
+                "does this itself for a single destination or a hidden-city direct fare — "
+                "call this tool yourself only for an 'anywhere from origin' search (omit "
+                "destination; returns cheapest destinations, up to max_results) or to force "
+                "a refresh search_routes didn't trigger."
             ),
             "parameters": {
                 "type": "object",
@@ -204,3 +208,38 @@ TOOL_DEFINITIONS = [
         },
     },
 ]
+
+# search_routes/get_live_prices are needed on essentially every turn.
+# get_user_profile, update_user_profile, and update_constraints together are
+# ~900 of the ~1400 fixed per-call tokens above, but only fire when the user
+# is actually stating or re-reading a preference/constraint — most turns are
+# a plain search and never touch them. Excluding their schemas on those turns
+# is the single biggest "fewer tools per call" lever available here.
+_CORE_TOOL_NAMES = ("search_routes", "get_live_prices")
+_PREFERENCE_TOOL_NAMES = ("get_user_profile", "update_user_profile", "update_constraints")
+
+# Deliberately broad/bilingual (this project's users write English and Polish) —
+# a false positive just costs some extra tokens; a false negative silently
+# drops a preference the user asked to be remembered, which is worse. Widen
+# this list rather than narrow it if a real preference statement gets missed.
+_PREFERENCE_HINT_RE = re.compile(
+    r"\b("
+    r"remember|prefer|preference|budget|carry.?on|checked.?bag|luggage|baggage|"
+    r"stops?|airline|loyalty|miles|frequent.?flyer|my name|call me|"
+    r"home airport|departure airport|countr(y|ies)|destinations?|"
+    r"zapami[eę]taj|prefer(uj|encj)\w*|bud[zż]et|baga[zż]|przesiad\w*|lini\w*|"
+    r"program\w*|mil[ea]\w*|nazywam|m[oó]wi[eć] do mnie|lotnisko|kraj\w*"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def select_tools(user_message: str) -> list[dict]:
+    """Tool schemas to send for this turn's user_message. Always includes the
+    search tools; includes the preference-write tools only when the message
+    hints at a durable preference or trip constraint. See module docstring
+    above _PREFERENCE_HINT_RE for the false-positive/false-negative trade-off."""
+    selected = [t for t in TOOL_DEFINITIONS if t["function"]["name"] in _CORE_TOOL_NAMES]
+    if _PREFERENCE_HINT_RE.search(user_message):
+        selected += [t for t in TOOL_DEFINITIONS if t["function"]["name"] in _PREFERENCE_TOOL_NAMES]
+    return selected

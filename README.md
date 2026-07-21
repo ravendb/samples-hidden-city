@@ -450,7 +450,6 @@ missing keys on first run. You can also fill them in manually:
 |----------|----------|-----------------|
 | `OPENAI_API_KEY` | **Yes** — agent won't start without it | [platform.openai.com](https://platform.openai.com/) → API Keys |
 | `TRAVELPAYOUTS_TOKEN` | No — only needed for live price lookups and bulk scraper | [app.travelpayouts.com/profile](https://app.travelpayouts.com/profile/) → Aviasales Data API token |
-| `TRAVELPAYOUTS_MARKER` | No — only needed to resolve real connecting-airport (hub) data | [app.travelpayouts.com/profile](https://app.travelpayouts.com/profile/) → your partner marker/ID |
 | `RAVENDB_URL` | Yes | `http://localhost:8080` for local dev (already set in `.env.example`) |
 | `RAVENDB_DATABASE` | Yes | `hidden-city` (already set in `.env.example`) |
 
@@ -458,12 +457,16 @@ Without a Travelpayouts token the agent falls back to fixture data seeded by
 `scripts/seed_local.py`. All demo scenarios work on fixture data.
 
 The bulk scraper (`/v2/prices/latest`) only returns price and a transfer count —
-never the actual connecting airport. For routes with transfers > 0, the scraper
-makes a separate real-time Flight Search call (search + poll) to resolve the
-real hub, capped at `MAX_HUB_LOOKUPS_PER_ORIGIN` (default 25) per scrape cycle
-since each lookup is far pricier than the bulk fetch. This needs
-`TRAVELPAYOUTS_MARKER` in addition to the token; without it, hub lookups are
-skipped and indirect routes keep `hubs: []` (score stays 0 for those until fixed).
+never the actual connecting airport. Travelpayouts only reveals real itinerary
+segments through its real-time Flight Search API, which requires a partnership
+approval + 50k MAU this project doesn't have. Instead, for routes with
+transfers > 0, the scraper guesses the connecting hub offline: it picks the
+major airport (from a small curated list) whose great-circle detour between
+origin and destination is smallest, using airport coordinates already in
+RavenDB — no external call, no partnership required. See
+`src/scraper/hub_inference.py`. It's a heuristic, not ground truth — routes
+whose origin/destination/candidate-hub coordinates aren't in RavenDB keep
+`hubs: []` (score stays 0 for those).
 
 ### Kubernetes (local — kind)
 

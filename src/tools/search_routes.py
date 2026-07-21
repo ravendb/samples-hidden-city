@@ -5,6 +5,15 @@ Two search modes:
   destination      → find routes from origin to that specific endpoint
   real_destination → find hidden city candidates where that city is a hub
 
+When a single destination (or the hidden-city direct fare) is stale or
+missing, this calls get_live_prices itself and re-reads the refreshed doc,
+rather than returning a "call get_live_prices yourself" note — every extra
+tool-call round trip the model makes resends the full system prompt + tool
+schemas (~2700 tokens), dwarfing the cost of one live lookup done here. The
+"anywhere from origin" browse (no destination, not hidden-city) is left
+alone — auto-refreshing every stale route in a broad list would mean one
+Travelpayouts call per route, which is the opposite of a cache.
+
 Results are serialised compactly to stay within the 800-token tool budget.
 """
 import logging
@@ -14,6 +23,7 @@ from typing import Optional
 from src.db.client import doc_to_dict, get_store, load_airport_names
 from src.db.geo import haversine_km
 from src.hidden_city.scorer import HiddenCityCandidate, RiskFactor
+from src.tools.get_live_prices import get_live_prices
 
 log = logging.getLogger(__name__)
 
@@ -35,8 +45,7 @@ def _is_stale(last_updated_str: str | None) -> bool:
 _CHECKED_BAGGAGE_MULTIPLIER = 0.2  # mirrors RiskFactor.CHECKED_BAGGAGE in scorer.py
 _MAX_FETCH_BUFFER = 30  # cap on how many extra docs we pull when post-filtering
 
-_NEARBY_MIN_SIMILARITY = 0.9989  # ~300km cutoff, see src/db/geo.py docstring
-_NEARBY_CANDIDATES = 20
+_NEARBY_CANDIDATES = 20  # ANN pool size vector_search ranks over before we re-sort by real km
 _NEARBY_MAX_RESULTS = 3
 
 _HUB_JOIN_FETCH = 50
@@ -59,17 +68,28 @@ def _adjusted_hidden_score(base_score: float, carry_on_only: bool) -> float:
 
 
 def _nearby_alternatives(store, iata: str) -> list[dict]:
-    """Nearby airports for `iata`, for the caller to offer as a question — never to
-    substitute automatically. See the "ask before nearby-airport substitution" rule
-    in SYSTEM_PROMPT.
+    """All candidate airports near `iata`, nearest first, for the caller to filter
+    by actual route availability (see _has_route_toward) and truncate — never to
+    substitute automatically. See the "ask before nearby-airport substitution"
+    rule in SYSTEM_PROMPT.
 
     Computed via RavenDB vector search over each airport's location_vector (a
     great-circle unit-vector projection of its coordinates, see src/db/geo.py) —
     this surfaces geographically close airports dynamically instead of relying
     on a hand-curated list, so it works for any airport, not just the handful
-    that had a "nearby" entry manually filled in. With ~96 airports in this
-    demo a brute-force scan would be equally instant — this exercises RavenDB's
-    vector search feature for the demo, not solving a real scale problem.
+    that had a "nearby" entry manually filled in.
+
+    Deliberately no minimum_similarity floor: a fixed distance cutoff means
+    "nearby" silently comes back empty for any origin whose closest neighbours
+    happen to sit just past that line (e.g. Beijing's nearest real alternatives
+    are 900km+ away — a same-country pick, but well outside a "commuter
+    distance" cutoff). Instead this always ranks the _NEARBY_CANDIDATES nearest
+    airports by vector similarity — empty only means no other airport document
+    exists at all. The caller/model shows the real distance_km, so the user can
+    judge for themselves whether 900km is still useful — that's better than
+    silence. Returns the full ranked pool (not just the top 3) since the caller
+    filters by route availability first — the 3 nearest geographically aren't
+    necessarily the 3 nearest that actually go anywhere useful.
     """
     with store.open_session() as session:
         origin_doc = session.load(f"airports/{iata}")
@@ -86,7 +106,6 @@ def _nearby_alternatives(store, iata: str) -> list[dict]:
             .vector_search(
                 "location_vector",
                 origin_vector,
-                minimum_similarity=_NEARBY_MIN_SIMILARITY,
                 number_of_candidates=_NEARBY_CANDIDATES,
             )
             .where_not_equals("iata", iata)
@@ -110,7 +129,33 @@ def _nearby_alternatives(store, iata: str) -> list[dict]:
         )
 
     scored.sort(key=lambda e: e["distance_km"])
-    return scored[:_NEARBY_MAX_RESULTS]
+    return scored
+
+
+def _has_route_toward(store, from_iata: str, to_iata: str, to_country: Optional[str]) -> bool:
+    """True if `from_iata` has at least one cached route either straight to
+    `to_iata`, or to another airport in `to_country` (its "vicinity") — used to
+    keep nearby-airport suggestions from being dead ends. Pure geographic
+    proximity (see _nearby_alternatives) says nothing about whether a candidate
+    airport has any flight data at all; in a sparse dataset like this demo's,
+    most airports have zero cached routes, so an unfiltered suggestion sends
+    the user chasing an airport that will just say "no flights" again."""
+    with store.open_session() as session:
+        routes = [
+            doc_to_dict(r)
+            for r in session.query_collection("Routes").where_equals("origin", from_iata).take(50)
+        ]
+    if not routes:
+        return False
+
+    dest_codes = {r.get("destination") for r in routes}
+    if to_iata in dest_codes:
+        return True
+    if not to_country:
+        return False
+
+    names = load_airport_names(store, list(dest_codes))
+    return any(names.get(code, {}).get("country") == to_country for code in dest_codes)
 
 
 def _connecting_hub_candidates(store, origin: str, destination: str) -> list[dict]:
@@ -227,14 +272,44 @@ async def search_routes(
         raw_results = [doc_to_dict(r) for r in query.take(fetch_count)]
 
     if hidden_city_mode and (price_direct is None or direct_price_stale):
-        return {
-            "routes": [],
-            "count": 0,
-            "note": (
-                f"No fresh direct price for {origin}->{real_destination} — call "
-                "get_live_prices for that route first, then retry the hidden city search."
-            ),
-        }
+        try:
+            live = await get_live_prices(origin, real_destination)
+        except Exception:
+            log.exception("Live refresh failed for %s->%s — continuing without it", origin, real_destination)
+            live = {"routes": []}
+        price_direct = None
+        if live.get("routes"):
+            with store.open_session() as session:
+                direct_doc = session.load(f"routes/{origin}-{real_destination}")
+            price_direct = direct_doc.get("typical_price", {}).get("min") if direct_doc else None
+        if price_direct is None:
+            return {
+                "routes": [],
+                "count": 0,
+                "note": f"No live fare found for {origin}->{real_destination} — cannot check hidden city savings.",
+            }
+        direct_price_stale = False
+
+    if destination and not hidden_city_mode and (
+        not raw_results or _is_stale(raw_results[0].get("last_updated"))
+    ):
+        try:
+            live = await get_live_prices(origin, destination)
+        except Exception:
+            log.exception("Live refresh failed for %s->%s — continuing without it", origin, destination)
+            live = {"routes": []}
+        if live.get("routes"):
+            with store.open_session() as session:
+                raw_results = [
+                    doc_to_dict(r)
+                    for r in session.query_collection("Routes")
+                    .where_equals("origin", origin)
+                    .where_equals("destination", destination)
+                    .take(fetch_count)
+                ]
+        # If the live call also came up empty, fall through with the stale/empty
+        # raw_results as-is — the connecting_hubs/nearby_alternatives logic below
+        # already handles "nothing found" gracefully.
 
     codes: set[str] = set()
     for r in raw_results:
@@ -351,8 +426,34 @@ async def search_routes(
             # when the actual gap is on the origin side). Keying by role also stops the
             # model from attributing an alternative to the wrong side.
             other_side = destination or real_destination
-            near_origin = _nearby_alternatives(store, origin)
-            near_destination = _nearby_alternatives(store, other_side) if other_side else []
+            other_side_country = None
+            if other_side:
+                other_side_country = load_airport_names(store, [other_side]).get(
+                    other_side, {}
+                ).get("country")
+
+            near_origin = []
+            for candidate in _nearby_alternatives(store, origin):
+                if len(near_origin) >= _NEARBY_MAX_RESULTS:
+                    break
+                # Without a concrete other_side to check reachability against (e.g. a
+                # broad "anywhere from origin" scan), fall back to plain geographic
+                # proximity — there's nothing to validate a route toward yet.
+                if not other_side or _has_route_toward(
+                    store, candidate["airport"], other_side, other_side_country
+                ):
+                    near_origin.append(candidate)
+
+            near_destination = []
+            if other_side:
+                for candidate in _nearby_alternatives(store, other_side):
+                    if len(near_destination) >= _NEARBY_MAX_RESULTS:
+                        break
+                    if _has_route_toward(
+                        store, origin, candidate["airport"], candidate.get("country")
+                    ):
+                        near_destination.append(candidate)
+
             if near_origin or near_destination:
                 result["nearby_alternatives"] = {
                     "near_origin": near_origin,
@@ -361,9 +462,18 @@ async def search_routes(
                 result["note"] = (
                     "No routes found. near_origin lists alternative DEPARTURE airports "
                     "near the origin; near_destination lists alternative ARRIVAL airports "
-                    "near the requested destination — both computed by geographic "
-                    "proximity search. These are the ONLY valid alternatives — never "
-                    "mention any other airport. Ask the user before searching one of "
-                    "them; never substitute silently."
+                    "near the destination — both computed by geographic proximity search "
+                    "AND filtered to airports with an actual cached route toward the other "
+                    "side. These are the ONLY valid alternatives — never mention any other "
+                    "airport, never swap or merge the two lists, and never build a route "
+                    "between two entries from the same list. Always pair a near_origin "
+                    "entry with the ORIGINAL destination unchanged, and a near_destination "
+                    "entry with the ORIGINAL origin unchanged, spelling out that unchanged "
+                    "side in the same sentence (e.g. 'from Beijing (PEK), you could instead "
+                    "fly to Katowice (KTW)'). State the facts you already have (code/city/"
+                    "country/distance_km) — don't ask the user for them. If one list is "
+                    "empty, say so plainly for that side; if both are empty, don't suggest "
+                    "any alternative. Ask before searching one of them; never substitute "
+                    "silently."
                 )
     return result

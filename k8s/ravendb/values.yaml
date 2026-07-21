@@ -18,6 +18,12 @@
 # suitable for a local/kind demo with no public DNS. For a cloud demo, switch to
 # mode: LetsEncrypt (needs spec.email, and per-node cert Secrets instead of the
 # cluster/CA cert pair) — see examples/tls/letsencrypt in the operator repo.
+#
+# TEMPORARY: down to 1 node. The current license.json returns
+# "LicenseLimitException: Your current license (None) does not allow adding
+# nodes to the cluster" (HTTP 402) when the bootstrap job tries to add node B.
+# Get a license that permits multi-node clusters (e.g. the free dev license at
+# https://ravendb.net/license/request/dev) and restore b/c below to go back to 3.
 spec:
   # Pinned, concrete tag -- the operator's admission webhook rejects floating
   # tags like ":7.2-latest" ("use a concrete, pinned tag"). Check for newer
@@ -31,12 +37,12 @@ spec:
     - tag: a
       publicServerUrl: https://a.hiddencity.local:443
       publicServerUrlTcp: tcp://a-tcp.hiddencity.local:443
-    - tag: b
-      publicServerUrl: https://b.hiddencity.local:443
-      publicServerUrlTcp: tcp://b-tcp.hiddencity.local:443
-    - tag: c
-      publicServerUrl: https://c.hiddencity.local:443
-      publicServerUrlTcp: tcp://c-tcp.hiddencity.local:443
+    # - tag: b
+    #   publicServerUrl: https://b.hiddencity.local:443
+    #   publicServerUrlTcp: tcp://b-tcp.hiddencity.local:443
+    # - tag: c
+    #   publicServerUrl: https://c.hiddencity.local:443
+    #   publicServerUrlTcp: tcp://c-tcp.hiddencity.local:443
 
   # nginx ingress must already be installed in the cluster (start-k8s.ps1 installs
   # it); for kind, add a/a-tcp/b/b-tcp/c/c-tcp.hiddencity.local entries to

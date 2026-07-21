@@ -208,7 +208,6 @@ $secretsContent = Get-Content $secretsFile -Raw
 $secretKeys = @(
     @{ Name = "OPENAI_API_KEY";       Required = $true;  FallbackFile = $null },
     @{ Name = "TRAVELPAYOUTS_TOKEN";  Required = $false; FallbackFile = $null },
-    @{ Name = "TRAVELPAYOUTS_MARKER"; Required = $false; FallbackFile = $null },
     @{ Name = "RAVENDB_LICENSE";      Required = $false; FallbackFile = "license.json" }
 )
 

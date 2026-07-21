@@ -327,9 +327,9 @@ html, body {
     <div class="info-box" id="travelpayouts-status" style="display:none">
       <span class="info-icon">✅</span>
       <span>
-        <code>TRAVELPAYOUTS_TOKEN</code> and <code>TRAVELPAYOUTS_MARKER</code> are already
+        <code>TRAVELPAYOUTS_TOKEN</code> is already
         configured in your environment. Click <strong>Skip</strong> to continue, or enter
-        new values below to replace them.
+        a new value below to replace it.
       </span>
     </div>
 
@@ -351,25 +351,10 @@ html, body {
       </span>
     </div>
 
-    <div class="field">
-      <label style="display:flex;align-items:center;gap:6px">
-        Account ID (marker)
-        <span class="tooltip-wrap">
-          <span class="tooltip-trigger" onclick="this.parentElement.classList.toggle('open')">?</span>
-          <span class="tooltip-bubble">
-            Your Travelpayouts affiliate marker/partner ID, shown on your account
-            dashboard. Sent with every price request to attribute it to your account.
-          </span>
-        </span>
-      </label>
-      <input type="text" id="travelpayouts-marker" placeholder="e.g. 123456"
-        oninput="validateTravelpayouts()" autocomplete="off" />
-    </div>
-
     <div class="info-box">
       <span class="info-icon">🔒</span>
       <span>
-        Both values are saved to <code>.env.local</code> in the project root.
+        Saved to <code>.env.local</code> in the project root.
         It is <strong>never committed</strong> — <code>.env.local</code> is in <code>.gitignore</code>.
       </span>
     </div>
@@ -453,18 +438,13 @@ checkSetupStatus();
 
 function validateTravelpayouts() {
   const token = document.getElementById('travelpayouts-token').value.trim();
-  const marker = document.getElementById('travelpayouts-marker').value.trim();
   const tokenInput = document.getElementById('travelpayouts-token');
-  const markerInput = document.getElementById('travelpayouts-marker');
 
   tokenInput.classList.remove('valid', 'invalid');
   if (token.length > 0) tokenInput.classList.add(token.length > 10 ? 'valid' : 'invalid');
 
-  markerInput.classList.remove('valid', 'invalid');
-  if (marker.length > 0) markerInput.classList.add('valid');
-
   const btn = document.getElementById('btn-3');
-  if (token.length > 10 && marker.length > 0) btn.classList.add('pulse');
+  if (token.length > 10) btn.classList.add('pulse');
   else btn.classList.remove('pulse');
 }
 
@@ -563,7 +543,6 @@ async function skipLicense() {
 async function submitStep3() {
   clearError(3);
   const token = document.getElementById('travelpayouts-token').value.trim();
-  const marker = document.getElementById('travelpayouts-marker').value.trim();
 
   setLoading('btn-3', true);
   try {
@@ -572,7 +551,6 @@ async function submitStep3() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         travelpayouts_token: token || null,
-        travelpayouts_marker: marker || null,
       }),
     });
     if (!res.ok) {

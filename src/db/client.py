@@ -1,7 +1,7 @@
 import os
 from typing import Optional
 
-import OpenSSL.crypto
+from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, pkcs12
 from ravendb import DocumentStore
 
 _store: Optional[DocumentStore] = None
@@ -16,10 +16,10 @@ def _pfx_to_pem(pfx_path: str, pem_path: str) -> str:
     if os.path.exists(pem_path):
         return pem_path
     with open(pfx_path, "rb") as f:
-        p12 = OpenSSL.crypto.load_pkcs12(f.read(), b"")
+        private_key, certificate, _ = pkcs12.load_key_and_certificates(f.read(), b"")
     with open(pem_path, "wb") as f:
-        f.write(OpenSSL.crypto.dump_privatekey(OpenSSL.crypto.FILETYPE_PEM, p12.get_privatekey()))
-        f.write(OpenSSL.crypto.dump_certificate(OpenSSL.crypto.FILETYPE_PEM, p12.get_certificate()))
+        f.write(private_key.private_bytes(Encoding.PEM, PrivateFormat.TraditionalOpenSSL, NoEncryption()))
+        f.write(certificate.public_bytes(Encoding.PEM))
     return pem_path
 
 
@@ -28,17 +28,23 @@ def get_store() -> DocumentStore:
     if _store is None:
         url = os.environ["RAVENDB_URL"]
         database = os.environ["RAVENDB_DATABASE"]
-        _store = DocumentStore(urls=[url], database=database)
+        store = DocumentStore(urls=[url], database=database)
 
         client_cert_pfx = os.environ.get("RAVENDB_CLIENT_CERT_PATH")
         if client_cert_pfx:
-            _store.certificate_pem_path = _pfx_to_pem(client_cert_pfx, "/tmp/ravendb-client.pem")
+            store.certificate_pem_path = _pfx_to_pem(client_cert_pfx, "/tmp/ravendb-client.pem")
 
         ca_cert = os.environ.get("RAVENDB_CA_CERT_PATH")
         if ca_cert:
-            _store.trust_store_path = ca_cert
+            store.trust_store_path = ca_cert
 
-        _store.initialize()
+        # Only assign to the module-level cache once initialize() actually
+        # succeeds -- otherwise a transient failure here (e.g. cert conversion)
+        # would leave a half-initialized store cached, and every later caller
+        # in this pod's lifetime would hit "did you forget calling initialize()?"
+        # instead of the real underlying error.
+        store.initialize()
+        _store = store
     return _store
 
 
@@ -68,18 +74,45 @@ def load_airport_names(store: DocumentStore, codes: list[str]) -> dict[str, dict
     Look up city/country for IATA codes from the Airports collection.
     Codes with no matching document are simply absent from the result —
     callers must never fall back to guessing a name for them.
+
+    Uses the batched multi-document load (`session.load([...])`, one
+    GetDocumentCommand for every id) rather than one `session.load(id)` call
+    per code — a route with many distinct destinations (real scraped data can
+    easily have 30+) would otherwise exceed RavenDB's default 30-requests-per-
+    session cap on its own.
     """
     unique = {c.upper() for c in codes if c}
     if not unique:
         return {}
 
-    result: dict[str, dict] = {}
+    ids = [f"airports/{code}" for code in unique]
     with store.open_session() as session:
-        for code in unique:
-            doc = session.load(f"airports/{code}")
-            if doc is not None:
-                d = doc_to_dict(doc)
-                result[code] = {"city": d.get("city"), "country": d.get("country")}
+        loaded = session.load(ids)
+
+    result: dict[str, dict] = {}
+    for code in unique:
+        doc = loaded.get(f"airports/{code}")
+        if doc is not None:
+            d = doc_to_dict(doc)
+            result[code] = {"city": d.get("city"), "country": d.get("country")}
+    return result
+
+
+def load_all_airport_coords(store: DocumentStore) -> dict[str, tuple[float, float]]:
+    """
+    (lat, lng) for every airport document, keyed by IATA code. Static
+    reference data — loaded once per scraper run and reused across every
+    origin/route in that run rather than queried per-route. Backs the
+    geographic hub-inference heuristic in src/scraper/hub_inference.py.
+    """
+    result: dict[str, tuple[float, float]] = {}
+    with store.open_session() as session:
+        for doc in session.query_collection("Airports").take(10_000):
+            d = doc_to_dict(doc)
+            iata = d.get("iata")
+            coords = d.get("coordinates") or {}
+            if iata and "lat" in coords and "lng" in coords:
+                result[iata.upper()] = (coords["lat"], coords["lng"])
     return result
 
 
