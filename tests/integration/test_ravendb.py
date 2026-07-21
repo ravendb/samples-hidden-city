@@ -39,12 +39,18 @@ class TestRouteStoreAndLoad:
         assert loaded["hidden_city_via"] == "LHR"
 
     def test_store_and_load_airport(self, ravendb_session):
+        # A real location_vector is always populated at seed time (src/db/seed.py) —
+        # leaving it empty here would leave a malformed vector doc behind in the
+        # shared test database, which poisons RavenDB's auto vector-search index for
+        # every other test in this session (an empty vector exceeds the index's
+        # map-failure tolerance and marks it errored for the rest of the run).
         airport = AirportDocument(
             iata="WAW",
             name="Warsaw Chopin",
             city="Warsaw",
             country="PL",
             coordinates=Coordinates(lat=52.1657, lng=20.9671),
+            location_vector=to_unit_vector(52.1657, 20.9671),
         )
         ravendb_session.store(airport.model_dump(), airport.airport_id())
         ravendb_session.save_changes()

@@ -26,7 +26,7 @@ def ravendb_url() -> str:
 @pytest.fixture(scope="session")
 def ravendb_store(request, ravendb_url):
     try:
-        httpx.get(f"{ravendb_url}/alive", timeout=2.0).raise_for_status()
+        httpx.get(f"{ravendb_url}/setup/alive", timeout=2.0).raise_for_status()
     except Exception:
         if request.config.getoption("--require-ravendb"):
             pytest.fail("RavenDB not reachable and --require-ravendb was set")
