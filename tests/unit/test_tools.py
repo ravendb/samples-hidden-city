@@ -34,25 +34,55 @@ class TestIsStale:
         assert _is_stale("not-a-date") is True
 
 
+class _FilterableQuery:
+    """A minimal in-memory stand-in for session.query_collection(...) that actually
+    applies where_equals/where_not_equals/where_greater_than/take, since a single
+    search_routes() call can now issue several distinct Routes queries (the main
+    search, plus hub-join's two side queries) that must each see correctly
+    filtered results — a single blanket "return everything" mock (fine when only
+    one query happened per call) would silently make every query return the same
+    unfiltered rows."""
+
+    def __init__(self, rows: list[dict]):
+        self._rows = list(rows)
+        self._take = None
+
+    def where_equals(self, field, value):
+        self._rows = [r for r in self._rows if r.get(field) == value]
+        return self
+
+    def where_not_equals(self, field, value):
+        self._rows = [r for r in self._rows if r.get(field) != value]
+        return self
+
+    def where_greater_than(self, field, value):
+        self._rows = [r for r in self._rows if r.get(field, 0) > value]
+        return self
+
+    def vector_search(self, *args, **kwargs):
+        return self
+
+    def take(self, n):
+        self._take = n
+        return self
+
+    def __iter__(self):
+        rows = self._rows[: self._take] if self._take is not None else self._rows
+        return iter(rows)
+
+
 class TestSearchRoutes:
     def _mock_session_with_routes(self, routes: list[dict], airport_candidates: list[dict] | None = None):
         """Routes queries (used by the main search + hub-join) and Airports queries
-        (used by the vector-search nearby lookup) get separate mock query objects,
-        routed by collection name — mirroring how session.query_collection() is
-        actually called with different collections for each purpose."""
-        routes_query = MagicMock()
-        routes_query.where_equals.return_value = routes_query
-        routes_query.where_greater_than.return_value = routes_query
-        routes_query.take.return_value = routes_query
-        routes_query.__iter__ = MagicMock(side_effect=lambda: iter(routes))
-
-        airports_query = MagicMock()
-        airports_query.where_not_equals.return_value = airports_query
-        airports_query.vector_search.return_value = airports_query
-        airports_query.__iter__ = MagicMock(side_effect=lambda: iter(airport_candidates or []))
+        (used by the vector-search nearby lookup) get independent, freshly-filtered
+        query objects per call, routed by collection name — mirroring how
+        session.query_collection() is actually called with different collections
+        and different filters for each purpose."""
 
         def query_collection(name, *args, **kwargs):
-            return airports_query if name == "Airports" else routes_query
+            if name == "Airports":
+                return _FilterableQuery(airport_candidates or [])
+            return _FilterableQuery(routes)
 
         mock_session = MagicMock()
         mock_session.__enter__ = MagicMock(return_value=mock_session)
@@ -138,8 +168,15 @@ class TestSearchRoutes:
     @pytest.mark.asyncio
     async def test_nearby_alternative_excludes_origin_airport(self):
         """The vector search query must exclude the origin airport from its own
-        candidate list."""
-        mock_store = self._mock_session_with_routes([], airport_candidates=[])
+        candidate list, even if the (mocked) vector search would otherwise
+        return it as a "candidate" (trivially, itself is maximally similar)."""
+        mock_store = self._mock_session_with_routes(
+            [],
+            airport_candidates=[
+                {"iata": "KRK", "city": "Krakow", "country": "PL", "coordinates": {"lat": 50.0777, "lng": 19.7848}},
+                {"iata": "WAW", "city": "Warsaw", "country": "PL", "coordinates": {"lat": 52.1657, "lng": 20.9671}},
+            ],
+        )
         krk_doc = {
             "iata": "KRK",
             "coordinates": {"lat": 50.0777, "lng": 19.7848},
@@ -150,10 +187,11 @@ class TestSearchRoutes:
         )
 
         with patch("src.tools.search_routes.get_store", return_value=mock_store):
-            await search_routes(origin="KRK", destination="LHR")
+            result = await search_routes(origin="KRK", destination="LHR")
 
-        airports_query = mock_store.open_session.return_value.query_collection("Airports")
-        airports_query.where_not_equals.assert_any_call("iata", "KRK")
+        codes = [a["airport"] for a in result["nearby_alternatives"]["near_origin"]]
+        assert "KRK" not in codes
+        assert "WAW" in codes
 
     @pytest.mark.asyncio
     async def test_connecting_hub_surfaces_when_no_direct_route(self):
@@ -371,6 +409,44 @@ class TestSearchRoutes:
             f"search_routes result is ~{estimated_tokens} tokens — exceeds {WARN_TOOL_TOKENS}-token budget"
         )
 
+    @pytest.mark.asyncio
+    async def test_connecting_hubs_result_within_800_token_budget(self):
+        """A connecting_hubs response at its max size (3 hubs) must also stay inside
+        the 800-token tool-result budget."""
+        routes = [
+            {"origin": "AAA", "destination": f"HUB{i}", "typical_price": {"min": 100.0}}
+            for i in range(3)
+        ] + [
+            {"origin": f"HUB{i}", "destination": "BBB", "typical_price": {"min": 80.0}}
+            for i in range(3)
+        ]
+        mock_store = self._mock_session_with_routes(routes)
+        now = datetime.now(timezone.utc).isoformat()
+        leg_docs = {
+            f"routes/AAA-HUB{i}": {"typical_price": {"min": 100.0 + i, "max": 150.0}, "last_updated": now}
+            for i in range(3)
+        }
+        leg_docs.update(
+            {
+                f"routes/HUB{i}-BBB": {"typical_price": {"min": 80.0 + i, "max": 120.0}, "last_updated": now}
+                for i in range(3)
+            }
+        )
+        mock_store.open_session.return_value.load.side_effect = lambda key: leg_docs.get(key)
+
+        with (
+            patch("src.tools.search_routes.load_airport_names", return_value={}),
+            patch("src.tools.search_routes.get_store", return_value=mock_store),
+        ):
+            result = await search_routes(origin="AAA", destination="BBB")
+
+        assert len(result["connecting_hubs"]) == 3
+        result_json = json.dumps(result)
+        estimated_tokens = len(result_json) // 4
+        assert estimated_tokens <= WARN_TOOL_TOKENS, (
+            f"connecting_hubs result is ~{estimated_tokens} tokens — exceeds {WARN_TOOL_TOKENS}-token budget"
+        )
+
 
 class TestSearchRoutesHiddenCity:
     def _mock_store(self, candidate_routes: list[dict], direct_route_doc: dict | None):
@@ -382,7 +458,7 @@ class TestSearchRoutesHiddenCity:
         mock_session = MagicMock()
         mock_session.__enter__ = MagicMock(return_value=mock_session)
         mock_session.__exit__ = MagicMock(return_value=False)
-        mock_session.query.return_value = mock_query
+        mock_session.query_collection.return_value = mock_query
         mock_session.load.return_value = direct_route_doc
 
         mock_store = MagicMock()
@@ -506,20 +582,17 @@ class TestSearchRoutesHiddenCity:
 
 class TestSaveConversation:
     def _make_mock_store(self, existing_doc=None):
+        stored_docs = {}
+
         mock_session = MagicMock()
         mock_session.__enter__ = MagicMock(return_value=mock_session)
         mock_session.__exit__ = MagicMock(return_value=False)
         mock_session.load.return_value = existing_doc
-
-        stored_docs = {}
-        mock_executor = MagicMock()
-        mock_executor.execute = MagicMock(
-            side_effect=lambda cmd: stored_docs.update({cmd.key: cmd.document})
-        )
+        mock_session.store = MagicMock(side_effect=lambda data, key: stored_docs.__setitem__(key, data))
+        mock_session.advanced.get_metadata_for.return_value = MagicMock()
 
         mock_store = MagicMock()
         mock_store.open_session.return_value = mock_session
-        mock_store.get_request_executor.return_value = mock_executor
         return mock_store, stored_docs
 
     @pytest.mark.asyncio
@@ -536,7 +609,6 @@ class TestSaveConversation:
 
         assert result["saved"] is True
         assert result["total_turns"] == 2  # user + assistant
-        assert mock_store.get_request_executor().execute.called
         doc = stored_docs["sessions/u1-1"]
         assert len(doc["turns"]) == 2
 
@@ -569,20 +641,17 @@ class TestSaveConversation:
 
 class TestUpdateUserProfile:
     def _make_mock_store(self, existing_doc=None):
+        stored_docs = {}
+
         mock_session = MagicMock()
         mock_session.__enter__ = MagicMock(return_value=mock_session)
         mock_session.__exit__ = MagicMock(return_value=False)
         mock_session.load.return_value = existing_doc
-
-        stored_docs = {}
-        mock_executor = MagicMock()
-        mock_executor.execute = MagicMock(
-            side_effect=lambda cmd: stored_docs.update({cmd.key: cmd.document})
-        )
+        mock_session.store = MagicMock(side_effect=lambda data, key: stored_docs.__setitem__(key, data))
+        mock_session.advanced.get_metadata_for.return_value = MagicMock()
 
         mock_store = MagicMock()
         mock_store.open_session.return_value = mock_session
-        mock_store.get_request_executor.return_value = mock_executor
         return mock_store, stored_docs
 
     @pytest.mark.asyncio
