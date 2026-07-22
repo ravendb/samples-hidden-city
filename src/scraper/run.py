@@ -27,7 +27,108 @@ from src.scraper.travelpayouts import fetch_cheapest_from
 
 log = logging.getLogger(__name__)
 
-_FALLBACK_ORIGINS = ["WAW", "LHR", "JFK", "DXB", "SIN"]
+# National-capital airports across Europe, Asia, and the US — widens cold-start
+# coverage (see module docstring) well beyond the original 6-airport list, so a
+# fresh cluster already has real cached routes for most countries a demo user
+# might ask about, without waiting on their profile to be saved first. Where a
+# capital city's own airport has negligible/no scheduled service, the nearest
+# major hub actually served by Travelpayouts is used instead (e.g. ZRH for
+# Bern, RGN for Naypyidaw, TLV for Jerusalem) — noted inline.
+_EUROPE_CAPITALS = [
+    "WAW",  # Warsaw, Poland
+    "LHR",  # London, UK
+    "CDG",  # Paris, France
+    "BER",  # Berlin, Germany
+    "MAD",  # Madrid, Spain
+    "FCO",  # Rome, Italy
+    "AMS",  # Amsterdam, Netherlands
+    "BRU",  # Brussels, Belgium
+    "VIE",  # Vienna, Austria
+    "ZRH",  # Switzerland — proxy for Bern
+    "ARN",  # Stockholm, Sweden
+    "OSL",  # Oslo, Norway
+    "CPH",  # Copenhagen, Denmark
+    "HEL",  # Helsinki, Finland
+    "DUB",  # Dublin, Ireland
+    "LIS",  # Lisbon, Portugal
+    "ATH",  # Athens, Greece
+    "PRG",  # Prague, Czechia
+    "BUD",  # Budapest, Hungary
+    "OTP",  # Bucharest, Romania
+    "SOF",  # Sofia, Bulgaria
+    "ZAG",  # Zagreb, Croatia
+    "BEG",  # Belgrade, Serbia
+    "KBP",  # Kyiv, Ukraine
+    "SVO",  # Moscow, Russia
+    "MSQ",  # Minsk, Belarus
+    "VNO",  # Vilnius, Lithuania
+    "RIX",  # Riga, Latvia
+    "TLL",  # Tallinn, Estonia
+    "KEF",  # Reykjavik — Iceland
+    "LJU",  # Ljubljana, Slovenia
+    "BTS",  # Bratislava, Slovakia
+    "SKP",  # Skopje, North Macedonia
+    "SJJ",  # Sarajevo, Bosnia and Herzegovina
+    "TGD",  # Podgorica, Montenegro
+    "TIA",  # Tirana, Albania
+    "KIV",  # Chisinau, Moldova
+    "LUX",  # Luxembourg City
+    "MLA",  # Valletta, Malta
+    "LCA",  # Cyprus — proxy for Nicosia (no airport)
+]
+
+_ASIA_CAPITALS = [
+    "ICN",  # Seoul, South Korea
+    "DXB",  # UAE — proxy for Abu Dhabi
+    "SIN",  # Singapore
+    "NRT",  # Tokyo, Japan
+    "PEK",  # Beijing, China
+    "DEL",  # New Delhi, India
+    "BKK",  # Bangkok, Thailand
+    "CGK",  # Jakarta, Indonesia
+    "MNL",  # Manila, Philippines
+    "HAN",  # Hanoi, Vietnam
+    "KUL",  # Kuala Lumpur, Malaysia
+    "ISB",  # Islamabad, Pakistan
+    "DAC",  # Dhaka, Bangladesh
+    "CMB",  # Colombo — Sri Lanka
+    "KTM",  # Kathmandu, Nepal
+    "RGN",  # Myanmar — proxy for Naypyidaw
+    "PNH",  # Phnom Penh, Cambodia
+    "VTE",  # Vientiane, Laos
+    "ULN",  # Ulaanbaatar, Mongolia
+    "NQZ",  # Astana, Kazakhstan
+    "TAS",  # Tashkent, Uzbekistan
+    "FRU",  # Bishkek, Kyrgyzstan
+    "DYU",  # Dushanbe, Tajikistan
+    "ASB",  # Ashgabat, Turkmenistan
+    "GYD",  # Baku, Azerbaijan
+    "EVN",  # Yerevan, Armenia
+    "TBS",  # Tbilisi, Georgia
+    "IKA",  # Tehran, Iran
+    "BGW",  # Baghdad, Iraq
+    "DAM",  # Damascus, Syria
+    "BEY",  # Beirut, Lebanon
+    "AMM",  # Amman, Jordan
+    "TLV",  # Israel — proxy for Jerusalem
+    "RUH",  # Riyadh, Saudi Arabia
+    "DOH",  # Doha, Qatar
+    "BAH",  # Manama, Bahrain
+    "KWI",  # Kuwait City
+    "MCT",  # Muscat, Oman
+    "SAH",  # Sanaa, Yemen
+    "KBL",  # Kabul, Afghanistan
+    "TPE",  # Taipei, Taiwan
+    "FNJ",  # Pyongyang, North Korea
+    "DIL",  # Dili, Timor-Leste
+]
+
+_US_CAPITALS = [
+    "JFK",  # New York (major hub, kept from the original list)
+    "IAD",  # Washington, D.C. — the actual US capital
+]
+
+_FALLBACK_ORIGINS = sorted(set(_EUROPE_CAPITALS + _ASIA_CAPITALS + _US_CAPITALS))
 
 
 def get_origins(store) -> list[str]:

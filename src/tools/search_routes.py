@@ -47,6 +47,14 @@ _MAX_FETCH_BUFFER = 30  # cap on how many extra docs we pull when post-filtering
 
 _NEARBY_CANDIDATES = 20  # ANN pool size vector_search ranks over before we re-sort by real km
 _NEARBY_MAX_RESULTS = 3
+# Generously above the documented Beijing case (~900km, still same-country) but
+# well short of a cross-continental hop -- without this, a sparse airport
+# catalog can leave the nearest candidate WITH cached route data thousands of
+# km away (e.g. PEK's nearest catalog entry with a route to WAW was SIN,
+# 4490km out), which reads as nonsense when presented as a "nearby airport".
+# Past this distance it's a connecting-flight candidate, not a substitute
+# departure/arrival airport -- see _connecting_hub_candidates below instead.
+_NEARBY_MAX_DISTANCE_KM = 1500
 
 _HUB_JOIN_FETCH = 50
 _HUB_JOIN_MAX_RESULTS = 3
