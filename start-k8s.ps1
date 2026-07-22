@@ -628,11 +628,18 @@ Write-Host ""
 
 $ravenReady = $false
 for ($i = 1; $i -le 40; $i++) {
-    $status = Invoke-Quiet {
-        kubectl get ravendbcluster ravendb-cluster -n $NS `
-            -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>$null
+    # -o json + ConvertFrom-Json, not -o jsonpath: PowerShell's native-argument
+    # quoting strips the embedded double quotes a jsonpath filter needs
+    # (@.type=="Ready") before kubectl.exe ever sees them (verified -- the
+    # jsonpath form always returned empty/exit 1 even once the cluster was
+    # genuinely Ready), which silently kept this check permanently "not ready".
+    $json = Invoke-Quiet { kubectl get ravendbcluster ravendb-cluster -n $NS -o json 2>$null } | Out-String
+    if ($json) {
+        try {
+            $readyCond = ($json | ConvertFrom-Json).status.conditions | Where-Object { $_.type -eq "Ready" }
+            if ($readyCond -and $readyCond.status -eq "True") { $ravenReady = $true; break }
+        } catch {}
     }
-    if ($status -eq "True") { $ravenReady = $true; break }
     Write-Host ("  [{0,2}/40] Not ready yet... ({1})" -f $i, (Get-Date -Format "HH:mm:ss")) -ForegroundColor Gray
     Start-Sleep 5
 }
