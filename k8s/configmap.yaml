@@ -4,14 +4,19 @@ metadata:
   name: hidden-city-config
   namespace: hidden-city
 data:
-  # The ravendb-operator chart creates one Service per node tag from
-  # k8s/ravendb/values.yaml (tags a/b/c) — ravendb-a, ravendb-b, ravendb-c —
-  # not a single load-balanced "-svc" name. Any one is a valid initial contact
-  # point; the client discovers the rest of the topology from there. Port 443
-  # is the node's HTTPS port (mode: None still means self-signed TLS, not
-  # plaintext) — see RAVENDB_CLIENT_CERT_PATH/RAVENDB_CA_CERT_PATH below for
-  # the client-cert auth this cluster requires on top of TLS.
-  RAVENDB_URL: "https://ravendb-a:443"
+  # Must be the node's publicServerUrl hostname (k8s/ravendb/values.yaml),
+  # NOT the k8s Service DNS name (ravendb-a) -- the server cert's SAN list
+  # only covers a.hiddencity.local / a-tcp.hiddencity.local etc., so
+  # connecting via "ravendb-a" fails strict hostname verification
+  # ("Hostname mismatch, certificate is not valid for 'ravendb-a'") even
+  # though the two names resolve to the exact same Service ClusterIP (see
+  # the CoreDNS step in start-k8s.ps1). Any one node's hostname is a valid
+  # initial contact point; the client discovers the rest of the topology
+  # from there. Port 443 is the node's HTTPS port (mode: None still means
+  # self-signed TLS, not plaintext) — see RAVENDB_CLIENT_CERT_PATH/
+  # RAVENDB_CA_CERT_PATH below for the client-cert auth this cluster
+  # requires on top of TLS.
+  RAVENDB_URL: "https://a.hiddencity.local:443"
   RAVENDB_DATABASE: "hidden-city"
   RAVENDB_CLIENT_CERT_PATH: "/certs/client/client.pfx"
   RAVENDB_CA_CERT_PATH: "/certs/ca/ca.crt"

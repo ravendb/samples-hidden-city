@@ -48,3 +48,12 @@ async def dispatch_tool(name: str, tool_input: dict, preferences: dict | None = 
         accepted = [p for p in inspect.signature(fn).parameters if p != "self"]
         log.warning("Tool %s rejected input %s: %s", name, tool_input, exc)
         return {"error": str(exc), "accepted_parameters": accepted}
+    except Exception as exc:
+        # Same external-actor boundary as above, but for runtime failures rather than
+        # bad arguments — missing config (e.g. TRAVELPAYOUTS_TOKEN), an upstream API
+        # error, a RavenDB hiccup. search_routes already guards its *internal*
+        # get_live_prices calls this way (see its try/except Exception blocks); this
+        # is the same guard for a tool dispatched directly from the model, which had
+        # no such safety net and would otherwise 500 the whole /chat request.
+        log.exception("Tool %s failed with input %s", name, tool_input)
+        return {"error": f"{name} failed: {exc}"}

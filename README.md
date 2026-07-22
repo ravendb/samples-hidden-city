@@ -441,6 +441,12 @@ uv run python -m src.worker.run
 The RavenDB Studio is available at http://localhost:8080 — no credentials needed
 in local mode. Open the `Routes` collection to inspect enriched documents.
 
+Press **Ctrl+C** to stop — `start.ps1` runs `docker compose down` on exit, so
+ports 8080/38888 are released immediately rather than left held by a
+still-running RavenDB container (this matters if you also switch to
+`-Mode K8s`, which port-forwards its own RavenDB Studio to a different local
+port to avoid clashing with this one).
+
 ### Environment variables
 
 `start.ps1` copies `.env.example` to `.env` automatically and prompts for any
@@ -506,7 +512,7 @@ After everything is ready:
 |-----|------|
 | `http://localhost:8000` | Agent chat API |
 | `http://localhost:8000/docs` | Swagger UI |
-| `http://localhost:8080` | RavenDB Studio |
+| `https://localhost:8081` | RavenDB Studio — self-signed cert, browser will warn; note **https** and port **8081**, not 8080, so this can run alongside Local mode's docker-compose RavenDB without a port clash |
 
 Flags (forwarded from `start.ps1 -Mode K8s`, or pass directly to `start-k8s.ps1`):
 

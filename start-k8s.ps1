@@ -489,17 +489,25 @@ kubectl rollout status deployment/agent -n $NS --timeout=120s
 Write-Ok "Agent deployment ready"
 
 # --- port-forwards ---
-# "ravendb-cluster-svc" is an assumed Service name -- verify against the actual
-# Service(s) the ravendb-cluster chart creates for this release (`kubectl get svc -n
-# hidden-city`) if this port-forward fails to connect.
+# The chart creates one Service per node tag (ravendb-<tag>, e.g. ravendb-a),
+# not a single "ravendb-cluster-svc" -- pick the first configured tag. RavenDB
+# only listens on HTTPS (443), even in mode: None (self-signed, not plaintext).
+# Local port 8081 (not 8080) deliberately avoids clashing with Local mode's
+# docker-compose RavenDB, which also binds host port 8080 -- run
+# `.\start.ps1 -Mode Local` and `.\start.ps1 -Mode K8s` side by side without
+# either stealing the other's port.
 Write-Host "`n  Starting port-forwards..." -ForegroundColor Gray
+
+$firstNodeTag = (Get-Content "$root\k8s\ravendb\values.yaml" |
+    Where-Object { $_ -match '^\s*-\s*tag:\s*(\S+)' -and $_ -notmatch '^\s*#' } |
+    ForEach-Object { $Matches[1] } | Select-Object -First 1)
 
 $pfAgent = Start-Process kubectl `
     -ArgumentList @("port-forward", "svc/agent-svc", "8000:80", "-n", $NS) `
     -PassThru -WindowStyle Hidden
 
 $pfRaven = Start-Process kubectl `
-    -ArgumentList @("port-forward", "svc/ravendb-cluster-svc", "8080:8080", "-n", $NS) `
+    -ArgumentList @("port-forward", "svc/ravendb-$firstNodeTag", "8081:443", "-n", $NS) `
     -PassThru -WindowStyle Hidden
 
 # --- done ---
@@ -507,7 +515,7 @@ Write-Host ""
 Write-Host "  =============================================" -ForegroundColor Green
 Write-Ok "Agent:          http://localhost:8000"
 Write-Ok "Swagger UI:     http://localhost:8000/docs"
-Write-Ok "RavenDB Studio: http://localhost:8080"
+Write-Ok "RavenDB Studio: https://localhost:8081  (self-signed cert -- browser will warn, click through)"
 Write-Host "  =============================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "  Press Ctrl+C to stop port-forwards." -ForegroundColor Gray

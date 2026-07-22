@@ -194,9 +194,10 @@ if (-not $SkipSeed) {
 }
 
 # --- worker in a separate window (optional) ---
+$workerProcess = $null
 if ($Worker) {
     Write-Host "`n  Starting price-drop worker in a separate window..." -ForegroundColor Gray
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", "& '$python' -m src.worker.run"
+    $workerProcess = Start-Process powershell -ArgumentList "-NoExit", "-Command", "& '$python' -m src.worker.run" -PassThru
     Write-Ok "Worker started (separate window)"
 }
 
@@ -206,4 +207,17 @@ Write-Host "  Swagger UI:    http://localhost:8000/docs" -ForegroundColor Gray
 Write-Host "  RavenDB Studio: http://localhost:8080" -ForegroundColor Gray
 Write-Host ""
 
-& $uvicorn src.agent.app:app --reload --port 8000
+# Ctrl+C (or any exit) runs the finally block -- without this, docker compose's
+# RavenDB container keeps holding port 8080 (and 38888) after the "demo" looks
+# stopped, which is exactly what silently conflicted with the Kubernetes mode's
+# own port-forward on 8080 earlier.
+try {
+    & $uvicorn src.agent.app:app --reload --port 8000
+} finally {
+    Write-Host "`n  Stopping RavenDB (docker compose down) to release its ports..." -ForegroundColor Gray
+    docker compose down
+    if ($workerProcess -and -not $workerProcess.HasExited) {
+        $workerProcess.Kill()
+    }
+    Write-Ok "Stopped -- ports 8080/38888 released"
+}
