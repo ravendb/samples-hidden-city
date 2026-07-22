@@ -44,14 +44,20 @@ spec:
             httpGet:
               path: /health
               port: 8000
+            # _startup() (app.py) runs the Travelpayouts bulk scraper synchronously
+            # before uvicorn serves -- hundreds of live hub-lookup calls on a cold
+            # start, easily a couple minutes. failureThreshold*periodSeconds must
+            # outlast that or kubelet kills the pod mid-startup on every boot.
             initialDelaySeconds: 10
             periodSeconds: 30
+            failureThreshold: 10
           readinessProbe:
             httpGet:
               path: /health
               port: 8000
             initialDelaySeconds: 5
             periodSeconds: 10
+            failureThreshold: 30
       volumes:
         - name: ravendb-client-cert
           secret:

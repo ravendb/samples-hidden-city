@@ -243,13 +243,60 @@ class TestVectorNearbySearch:
         with patch("src.tools.search_routes.get_store", return_value=ravendb_store):
             results = _nearby_alternatives(ravendb_store, "PEK")
 
+        # _nearby_alternatives returns the full ranked pool now (no distance floor,
+        # no truncation) — the caller in search_routes() filters by route
+        # availability and truncates to the top 3. So JFK legitimately appears
+        # here too; what matters is that same-region airports rank above it.
         codes_in_order = [r["airport"] for r in results]
-        assert "JFK" not in codes_in_order
         assert "PVG" in codes_in_order
         assert "CKG" in codes_in_order
-        assert codes_in_order.index("PVG") < codes_in_order.index("CKG") or set(
-            codes_in_order
-        ) >= {"PVG", "CKG"}
+        assert "JFK" in codes_in_order
+        assert codes_in_order.index("PVG") < codes_in_order.index("JFK")
+        assert codes_in_order.index("CKG") < codes_in_order.index("JFK")
+
+
+@pytest.mark.integration
+class TestHasRouteToward:
+    """Verifies the reachability filter that keeps nearby-airport suggestions from
+    being dead ends: a geographically close airport with zero cached routes
+    toward the destination (or its country) must not be suggested."""
+
+    @pytest.mark.asyncio
+    async def test_excludes_candidate_with_no_route_toward_destination(self, ravendb_store):
+        airports = [
+            ("ZNR", "Nearby-With-Route", "PL", 52.0, 21.0),
+            ("ZND", "Nearby-No-Route", "PL", 52.5, 20.5),
+        ]
+        with ravendb_store.open_session() as session:
+            for iata, city, country, lat, lng in airports:
+                doc = {
+                    "iata": iata,
+                    "name": city,
+                    "city": city,
+                    "country": country,
+                    "coordinates": {"lat": lat, "lng": lng},
+                    "location_vector": to_unit_vector(lat, lng),
+                }
+                session.store(doc, f"airports/{iata}")
+                session.advanced.get_metadata_for(doc)["@collection"] = "Airports"
+            has_route = {
+                "origin": "ZNR",
+                "destination": "ZTGT",
+                "hubs": [],
+                "typical_price": {"min": 50.0, "max": 80.0, "currency": "USD"},
+                "duration_avg_min": 0,
+                "hidden_city_score": 0.0,
+                "hidden_city_risks": [],
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+            }
+            session.store(has_route, "routes/ZNR-ZTGT")
+            session.advanced.get_metadata_for(has_route)["@collection"] = "Routes"
+            session.save_changes()
+
+        from src.tools.search_routes import _has_route_toward
+
+        assert _has_route_toward(ravendb_store, "ZNR", "ZTGT", None) is True
+        assert _has_route_toward(ravendb_store, "ZND", "ZTGT", None) is False
 
 
 @pytest.mark.integration

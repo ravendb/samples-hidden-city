@@ -169,7 +169,7 @@ if (-not $cliReady) {
 }
 Write-Ok "kind, kubectl, helm, docker found"
 
-$totalSteps = 8
+$totalSteps = 9
 if ($SkipBuild)    { $totalSteps-- }
 if ($SkipOperator) { $totalSteps-- }
 $step = 0
@@ -187,6 +187,50 @@ if ($existing -contains $ClusterName) {
     Write-Ok "Cluster created"
 }
 kubectl config use-context "kind-$ClusterName" | Out-Null
+
+# kind-config.yaml disables kindnet (the default CNI) -- it doesn't reliably
+# hairpin a pod's own traffic back to itself through its own Service ClusterIP,
+# which RavenDB's self-signed-cert startup check needs
+# (AssertServerCanContactItselfWhenAuthIsOn). Calico handles this correctly.
+#
+# Installed via the Tigera Operator, not the raw calico.yaml manifest -- the
+# raw manifest's install-cni init container fails with "found no writeable
+# directory" / permission denied on Docker Desktop for Windows kind nodes.
+# The operator's install path doesn't hit that. kubectl create is used (not
+# apply) since the CRDs are large; safe to skip if already installed.
+Write-Host "  Installing Calico CNI (via Tigera Operator)..." -ForegroundColor Gray
+Invoke-Quiet {
+    kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/master/manifests/tigera-operator.yaml 2>$null
+} | Out-Null
+kubectl -n tigera-operator rollout status deployment/tigera-operator --timeout=90s
+
+$calicoInstalled = Invoke-Quiet { kubectl get installation.operator.tigera.io default 2>$null }
+if (-not $calicoInstalled) {
+    $calicoCr = @"
+apiVersion: operator.tigera.io/v1
+kind: Installation
+metadata:
+  name: default
+spec:
+  calicoNetwork:
+    ipPools:
+    - name: default-ipv4-ippool
+      blockSize: 26
+      cidr: 192.168.0.0/16
+      encapsulation: VXLANCrossSubnet
+      natOutgoing: Enabled
+      nodeSelector: all()
+---
+apiVersion: operator.tigera.io/v1
+kind: APIServer
+metadata:
+  name: default
+spec: {}
+"@
+    $calicoCr | kubectl create -f -
+}
+kubectl wait --for=condition=Ready node --all --timeout=180s | Out-Null
+Write-Ok "Calico ready"
 
 # --- secrets ---
 $step++
@@ -239,11 +283,17 @@ foreach ($k in $secretKeys) {
 
 $secretsContent | Set-Content $secretsFile -Encoding utf8
 
-# RavenDB cert/license secrets are NOT auto-generated here -- self-signed certs
-# for RavenDB need to come from RavenDB's own Setup Wizard / setup package, not
-# a generic openssl cert, or the cluster bootstrapper will reject them. Check
-# for the four generic secrets the ravendb-cluster chart expects
-# (k8s/ravendb/values.yaml) and stop with exact instructions if any are missing.
+# RavenDB cert/license secrets are NOT auto-generated here. openssl-generated
+# certs do work (verified) -- server/client certs need
+# keyUsage=digitalSignature,keyEncipherment + extendedKeyUsage=serverAuth
+# (client: clientAuth), the CA needs
+# basicConstraints=CA:TRUE + keyUsage=keyCertSign,cRLSign, and PFX files must
+# use legacy SHA1/3DES encoding (openssl 3.x's SHA-256 default PKCS12 isn't
+# readable by the operator: "pkcs12: unknown digest algorithm"). That's still
+# manual because it's security-sensitive material this script shouldn't
+# silently fabricate -- check for the four generic secrets the ravendb-cluster
+# chart expects (k8s/ravendb/values.yaml) and stop with exact instructions if
+# any are missing.
 $requiredRavenSecrets = @(
     @{ Name = "ravendb-license";     Hint = "kubectl create secret generic ravendb-license -n $NS --from-file=license.json=<path-to-license.json>" },
     @{ Name = "ravendb-cert";        Hint = "kubectl create secret generic ravendb-cert -n $NS --from-file=server.pfx=<path-to-server.pfx>" },
@@ -263,7 +313,9 @@ if ($missingRaven.Count -gt 0) {
         Write-Host "        $($s.Hint)" -ForegroundColor Gray
     }
     Write-Host ""
-    Write-Host "  Generate these via the RavenDB self-signed setup package, then re-run" -ForegroundColor Yellow
+    Write-Host "  Generate these with openssl (CA + server cert with all node SANs +" -ForegroundColor Yellow
+    Write-Host "  client cert -- see the comment above this check for the exact extensions" -ForegroundColor Yellow
+    Write-Host "  and legacy PKCS12 flags needed), or via RavenDB's Setup Wizard, then re-run" -ForegroundColor Yellow
     Write-Host "  this script with -SkipBuild -SkipOperator to skip straight to cluster deploy." -ForegroundColor Yellow
     Write-Host "  See: https://github.com/ravendb/ravendb-operator/tree/main/examples/tls/selfsigned" -ForegroundColor Gray
     exit 1
@@ -319,6 +371,83 @@ Write-Step $step $totalSteps "Installing RavenDB cluster  (helm upgrade --instal
 helm upgrade --install ravendb-cluster ravendb-operator/ravendb-cluster `
     -n $NS --create-namespace -f "$root\k8s\ravendb\values.yaml"
 Write-Ok "RavenDB cluster chart applied"
+
+# --- CoreDNS: make each node's public hostname resolve inside the cluster ---
+# There's no real DNS for *.hiddencity.local -- both the bootstrap job and
+# RavenDB's own self-signed-cert startup check (AssertServerCanContactItself-
+# WhenAuthIsOn) need <tag>.hiddencity.local / <tag>-tcp.hiddencity.local to
+# resolve from inside the cluster. Point each at its stable ravendb-<tag>
+# Service ClusterIP (not the pod IP -- that changes on every pod restart).
+# This only works because Calico (installed above via Tigera Operator, not
+# kindnet) correctly hairpins a pod's traffic back to itself through a
+# Service; kindnet silently times out on that path instead.
+$step++
+Write-Step $step $totalSteps "Configuring CoreDNS for RavenDB node hostnames"
+
+$nodeTags = Get-Content "$root\k8s\ravendb\values.yaml" |
+    Where-Object { $_ -match '^\s*-\s*tag:\s*(\S+)' -and $_ -notmatch '^\s*#' } |
+    ForEach-Object { $Matches[1] }
+
+$hostsLines = @()
+foreach ($tag in $nodeTags) {
+    $svcIp = $null
+    for ($i = 1; $i -le 15; $i++) {
+        $svcIp = Invoke-Quiet { kubectl get svc "ravendb-$tag" -n $NS -o jsonpath='{.spec.clusterIP}' 2>$null }
+        if ($svcIp) { break }
+        Start-Sleep 2
+    }
+    if (-not $svcIp) {
+        Write-Warn "Could not find Service ravendb-$tag -- skipping its DNS entry"
+        continue
+    }
+    $hostsLines += "           $svcIp $tag.hiddencity.local $tag-tcp.hiddencity.local"
+}
+
+if ($hostsLines.Count -gt 0) {
+    $hostsEntries = ($hostsLines -join "`n")
+    $corefileYaml = @"
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns
+  namespace: kube-system
+data:
+  Corefile: |
+    .:53 {
+        errors
+        health {
+           lameduck 5s
+        }
+        ready
+        hosts {
+$hostsEntries
+           fallthrough
+        }
+        kubernetes cluster.local in-addr.arpa ip6.arpa {
+           pods insecure
+           fallthrough in-addr.arpa ip6.arpa
+           ttl 30
+        }
+        prometheus :9153
+        forward . /etc/resolv.conf {
+           max_concurrent 1000
+        }
+        cache 30 {
+           disable success cluster.local
+           disable denial cluster.local
+        }
+        loop
+        reload
+        loadbalance
+    }
+"@
+    $corefileYaml | kubectl apply -f - | Out-Null
+    kubectl rollout restart deployment coredns -n kube-system | Out-Null
+    kubectl rollout status deployment coredns -n kube-system --timeout=60s
+    Write-Ok "CoreDNS configured for node(s): $($nodeTags -join ', ')"
+} else {
+    Write-Warn "No RavenDB node Services found -- CoreDNS not configured, bootstrap will likely fail"
+}
 
 # --- deploy app manifests ---
 $step++

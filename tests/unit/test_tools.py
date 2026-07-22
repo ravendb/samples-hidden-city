@@ -34,6 +34,19 @@ class TestIsStale:
         assert _is_stale("not-a-date") is True
 
 
+def _load_side_effect(single_map: dict):
+    """Mimics the real modern ravendb client's session.load() dual shape: a
+    single string key returns a single doc (or None), a list of keys returns a
+    dict keyed by id (the batched multi-load load_airport_names now uses)."""
+
+    def _load(key_or_keys):
+        if isinstance(key_or_keys, list):
+            return {k: single_map[k] for k in key_or_keys if single_map.get(k) is not None}
+        return single_map.get(key_or_keys)
+
+    return _load
+
+
 class _FilterableQuery:
     """A minimal in-memory stand-in for session.query_collection(...) that actually
     applies where_equals/where_not_equals/where_greater_than/take, since a single
@@ -90,7 +103,7 @@ class TestSearchRoutes:
         mock_session.__enter__ = MagicMock(return_value=mock_session)
         mock_session.__exit__ = MagicMock(return_value=False)
         mock_session.query_collection = MagicMock(side_effect=query_collection)
-        mock_session.load.return_value = None  # no airport/route doc exists unless overridden
+        mock_session.load = MagicMock(side_effect=_load_side_effect({}))  # no doc unless overridden
 
         mock_store = MagicMock()
         mock_store.open_session.return_value = mock_session
@@ -145,14 +158,17 @@ class TestSearchRoutes:
             "country": "PL",
             "coordinates": {"lat": 52.1657, "lng": 20.9671},
         }
-        mock_store = self._mock_session_with_routes([], airport_candidates=[waw_candidate])
+        # WAW must have a cached route toward LHR (or LHR's country) to survive the
+        # "don't suggest dead-end airports" reachability filter — see _has_route_toward.
+        routes = [{"origin": "WAW", "destination": "LHR", "typical_price": {"min": 400.0}}]
+        mock_store = self._mock_session_with_routes(routes, airport_candidates=[waw_candidate])
         krk_doc = {
             "iata": "KRK",
             "coordinates": {"lat": 50.0777, "lng": 19.7848},
             "location_vector": [0.6, 0.2, 0.77],
         }
-        mock_store.open_session.return_value.load.side_effect = lambda key: (
-            krk_doc if key == "airports/KRK" else None
+        mock_store.open_session.return_value.load.side_effect = _load_side_effect(
+            {"airports/KRK": krk_doc}
         )
 
         with patch("src.tools.search_routes.get_store", return_value=mock_store):
@@ -185,16 +201,18 @@ class TestSearchRoutes:
             "country": "PL",
             "coordinates": {"lat": 52.1657, "lng": 20.9671},
         }
+        # WAW must have a cached route toward LHR to survive the reachability filter.
+        routes = [{"origin": "WAW", "destination": "LHR", "typical_price": {"min": 400.0}}]
         mock_store = self._mock_session_with_routes(
-            [], airport_candidates=[krk_candidate, waw_candidate]
+            routes, airport_candidates=[krk_candidate, waw_candidate]
         )
         krk_doc = {
             "iata": "KRK",
             "coordinates": {"lat": 50.0777, "lng": 19.7848},
             "location_vector": [0.6, 0.2, 0.77],
         }
-        mock_store.open_session.return_value.load.side_effect = lambda key: (
-            krk_doc if key == "airports/KRK" else None
+        mock_store.open_session.return_value.load.side_effect = _load_side_effect(
+            {"airports/KRK": krk_doc}
         )
 
         with patch("src.tools.search_routes.get_store", return_value=mock_store):
@@ -248,14 +266,16 @@ class TestSearchRoutes:
             "country": "PL",
             "coordinates": {"lat": 52.1657, "lng": 20.9671},
         }
-        mock_store = self._mock_session_with_routes([], airport_candidates=[waw_candidate])
+        # WAW must have a cached route toward LHR to survive the reachability filter.
+        routes = [{"origin": "WAW", "destination": "LHR", "typical_price": {"min": 400.0}}]
+        mock_store = self._mock_session_with_routes(routes, airport_candidates=[waw_candidate])
         krk_doc = {
             "iata": "KRK",
             "coordinates": {"lat": 50.0777, "lng": 19.7848},
             "location_vector": [0.6, 0.2, 0.77],
         }
-        mock_store.open_session.return_value.load.side_effect = lambda key: (
-            krk_doc if key == "airports/KRK" else None
+        mock_store.open_session.return_value.load.side_effect = _load_side_effect(
+            {"airports/KRK": krk_doc}
         )
 
         with patch("src.tools.search_routes.get_store", return_value=mock_store):

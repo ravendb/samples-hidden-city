@@ -10,7 +10,10 @@
       "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python -m scripts.measure_tokens)",
       "Bash(.venv/Scripts/python -m pip install \"ijson==2.6.1\")",
       "Bash(.venv/Scripts/python -c ' *)",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(kubectl get *)",
+      "Bash(kubectl logs *)",
+      "Bash(kubectl describe *)"
     ]
   }
 }

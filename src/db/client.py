@@ -80,6 +80,11 @@ def load_airport_names(store: DocumentStore, codes: list[str]) -> dict[str, dict
     per code — a route with many distinct destinations (real scraped data can
     easily have 30+) would otherwise exceed RavenDB's default 30-requests-per-
     session cap on its own.
+
+    Quirk in this client version: `session.load([single_id])` collapses to the
+    bare document (or None) instead of a {id: doc} mapping when the list has
+    exactly one element — only 2+ elements get the real batched dict shape. A
+    single id is loaded via the singular, unambiguous form instead.
     """
     unique = {c.upper() for c in codes if c}
     if not unique:
@@ -87,7 +92,10 @@ def load_airport_names(store: DocumentStore, codes: list[str]) -> dict[str, dict
 
     ids = [f"airports/{code}" for code in unique]
     with store.open_session() as session:
-        loaded = session.load(ids)
+        if len(ids) == 1:
+            loaded = {ids[0]: session.load(ids[0])}
+        else:
+            loaded = session.load(ids)
 
     result: dict[str, dict] = {}
     for code in unique:

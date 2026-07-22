@@ -1,3 +1,4 @@
+import inspect
 import logging
 
 from src.tools.get_live_prices import get_live_prices
@@ -37,4 +38,13 @@ async def dispatch_tool(name: str, tool_input: dict, preferences: dict | None = 
     if name == "search_routes" and preferences:
         tool_input = _apply_search_preferences(tool_input, preferences)
     log.info("Dispatching tool %s with input %s", name, tool_input)
-    return await fn(**tool_input)
+    try:
+        return await fn(**tool_input)
+    except TypeError as exc:
+        # The model is an external actor from this boundary's point of view — a
+        # malformed/unsupported argument (e.g. a param that only exists on a
+        # different tool) must not crash the whole turn. Surface it as a tool
+        # result instead, so the model can see the accepted parameters and retry.
+        accepted = [p for p in inspect.signature(fn).parameters if p != "self"]
+        log.warning("Tool %s rejected input %s: %s", name, tool_input, exc)
+        return {"error": str(exc), "accepted_parameters": accepted}
