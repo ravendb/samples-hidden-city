@@ -21,6 +21,23 @@ _BASE = "https://api.travelpayouts.com"
 _PRICE_SPREAD = 0.15  # ±15% around the scraped price to fill min/max
 
 
+async def validate_token(token: str) -> bool:
+    """One minimal request instead of a full 85-origin scrape (see
+    src/scraper/run.py) — lets a bad token fail once, with one clear message,
+    instead of once per origin. Returns False only on a confirmed 401
+    (invalid/expired token); any other outcome (including network errors) is
+    treated as "can't tell, don't block" and returns True."""
+    params = {"origin": "WAW", "token": token, "currency": "usd", "limit": 1, "period_type": "month"}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(f"{_BASE}/v2/prices/latest", params=params)
+        if response.status_code == 401:
+            return False
+    except Exception:
+        pass
+    return True
+
+
 async def fetch_cheapest_from(
     origin: str,
     token: str,

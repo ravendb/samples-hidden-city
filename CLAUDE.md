@@ -198,6 +198,17 @@ uploaded/retrieved whole via the Profile screen (`/profile`) and its
 IMPORTANT: Do NOT use sidecar injection to blindly push context into every prompt.
 The model must call RavenDB explicitly as a tool — it decides what to fetch.
 
+One narrow, documented exception: `_try_fast_path()` in `src/agent/loop.py`
+pre-resolves an unambiguous "from X to Y" message via
+`src/tools/resolve_airports.py` (RavenDB full-text search over `Airports`,
+using an auto-created index — see README's "RavenDB Features Used") and
+pre-fetches `search_routes` itself, cutting the turn from two OpenAI calls to
+one (~2100 tokens → ~750 measured). This is *not* a blanket sidecar — it only
+fires when both airports resolve to exactly one match each; anything
+ambiguous or unmatched returns `None` and falls back to the model calling
+`search_routes` itself, unchanged. Do not widen this pattern to other tools
+without the same strict "exact match or fall back" discipline.
+
 ### Tool Definitions (`src/tools/`)
 
 | Tool                 | Description                                                              |

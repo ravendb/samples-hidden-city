@@ -74,6 +74,24 @@ function Find-Uv {
     return $null
 }
 
+function Install-Uv {
+    Write-Warn "uv not found -- installing automatically..."
+    $winget = Get-Command winget -ErrorAction SilentlyContinue
+    if ($winget) {
+        winget install --id astral-sh.uv -e --silent --accept-package-agreements --accept-source-agreements
+    } else {
+        Write-Host "  winget not available, falling back to the official install script..." -ForegroundColor Gray
+        Invoke-Expression (Invoke-RestMethod -Uri "https://astral.sh/uv/install.ps1")
+    }
+    $uv = Find-Uv
+    if (-not $uv) {
+        Write-Error "uv installation finished but the executable could not be located. Reopen this terminal and try again."
+        exit 1
+    }
+    Write-Ok "uv installed"
+    return $uv
+}
+
 function Get-EnvValue($lines, $key) {
     $line = $lines | Where-Object { $_ -match "^$key=(.+)$" } | Select-Object -First 1
     if ($line -match "^$key=(.+)$") { return $Matches[1].Trim() }
@@ -106,8 +124,7 @@ if (Test-Path $python) {
 if (-not (Test-Path $python)) {
     $uv = Find-Uv
     if (-not $uv) {
-        Write-Error "uv not found. Install it: winget install astral-sh.uv, then reopen this terminal."
-        exit 1
+        $uv = Install-Uv
     }
     Write-Host "`n  Creating venv (Python 3.11-3.13)..." -ForegroundColor Gray
     & $uv venv --python ">=3.11,<3.14" "$root\.venv"
@@ -147,13 +164,16 @@ if (Test-Path "$root\license.json") {
 $envLines = Get-Content "$root\.env"
 
 $keysInfo = @(
-    @{ Key = "OPENAI_API_KEY";       Desc = "OpenAI API key (agent won't start without it)";                       Required = $true  },
-    @{ Key = "TRAVELPAYOUTS_TOKEN";  Desc = "Travelpayouts / Aviasales Data API token (optional, bulk scraper)";   Required = $false }
+    @{ Key = "OPENAI_API_KEY";       Desc = "OpenAI API key (agent won't start without it)";                       Required = $true;  Placeholder = "sk-..." },
+    @{ Key = "TRAVELPAYOUTS_TOKEN";  Desc = "Travelpayouts / Aviasales Data API token (optional, bulk scraper)";   Required = $false; Placeholder = "..." }
 )
 
 $anyMissing = $false
 foreach ($k in $keysInfo) {
-    if (-not (Get-EnvValue $envLines $k.Key)) {
+    $currentValue = Get-EnvValue $envLines $k.Key
+    # A fresh .env copied from .env.example carries its literal placeholder
+    # value (e.g. "sk-...") -- that must be treated as unset, not as a real key.
+    if (-not $currentValue -or $currentValue -eq $k.Placeholder) {
         if (-not $anyMissing) {
             Write-Host ""
             Write-Warn "Some API keys are missing in .env. Enter values now or press Enter to skip."

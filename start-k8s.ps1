@@ -1,18 +1,20 @@
 # start-k8s.ps1 -- starts the full stack on a local kind cluster
 #
 # Usage:
-#   .\start-k8s.ps1                  # create cluster + operator + full deploy + port-forwards
+#   .\start-k8s.ps1                  # collect secrets/certs + create cluster + operator + full deploy + port-forwards
 #   .\start-k8s.ps1 -SkipBuild       # skip docker build (image already loaded)
 #   .\start-k8s.ps1 -SkipOperator    # skip cert-manager/ingress-nginx/operator install (already installed)
 #   .\start-k8s.ps1 -DeleteCluster   # delete the kind cluster and exit
 #
-# Prerequisites: kind, kubectl, helm are auto-installed via winget if missing.
+# Prerequisites: kind, kubectl, helm, openssl are auto-installed via winget if missing.
 # Docker Desktop is also auto-installed via winget, but needs one manual step
 # (first launch: accept the license, finish WSL2/Hyper-V setup, possibly reboot) --
 # the script installs it and asks you to re-run once it's running.
 #
-# TLS certs (license/cert-manager/ingress-nginx/operator are all automated below,
-# but the RavenDB self-signed cert material is NOT auto-generated -- see step 2).
+# Everything the deploy needs -- OpenAI/Travelpayouts/license values and the
+# RavenDB TLS cert chain -- is collected or generated FIRST, before the kind
+# cluster even exists. Nothing about the cluster/operator/RavenDB deploy can
+# fail partway through for a missing secret or cert.
 # Operator project: https://github.com/ravendb/ravendb-operator
 
 param(
@@ -54,17 +56,20 @@ function Invoke-Quiet {
 # 2. the repo-root .env file (the Local/docker-compose flow's env source)
 # 3. an optional plain file, whole contents as the value (e.g. license.json)
 function Find-ExistingValue {
-    param([string]$Name, [string]$FallbackFile = $null)
+    param([string]$Name, [string]$FallbackFile = $null, [string]$Placeholder = $null)
 
+    # A fresh .env copied from .env.example (by the Local flow's start.ps1) carries
+    # its literal placeholder value (e.g. "sk-...") -- that must not be reused as
+    # if it were a real key, so it's excluded at every source below.
     $fromEnv = [System.Environment]::GetEnvironmentVariable($Name)
-    if ($fromEnv) { return @{ Value = $fromEnv; Source = "environment variable `$env:$Name" } }
+    if ($fromEnv -and $fromEnv -ne $Placeholder) { return @{ Value = $fromEnv; Source = "environment variable `$env:$Name" } }
 
     $dotEnvPath = "$root\.env"
     if (Test-Path $dotEnvPath) {
         $line = Get-Content $dotEnvPath | Where-Object { $_ -match "^$Name=(.+)$" } | Select-Object -First 1
         if ($line -match "^$Name=(.+)$") {
             $val = $Matches[1].Trim()
-            if ($val) { return @{ Value = $val; Source = ".env" } }
+            if ($val -and $val -ne $Placeholder) { return @{ Value = $val; Source = ".env" } }
         }
     }
 
@@ -112,6 +117,123 @@ function Ensure-CliTool($cmd, $wingetId, $displayName) {
     }
     Write-Warn "$displayName installed but not visible on PATH in this terminal session yet."
     return $false
+}
+
+# Reads the active (uncommented) node tags out of k8s/ravendb/values.yaml,
+# e.g. @("a") today, @("a","b","c") if b/c get uncommented later. Used for
+# the cert SAN list, CoreDNS setup, and picking the port-forward node.
+function Get-RavenNodeTags {
+    Get-Content "$root\k8s\ravendb\values.yaml" |
+        Where-Object { $_ -match '^\s*-\s*tag:\s*(\S+)' -and $_ -notmatch '^\s*#' } |
+        ForEach-Object { $Matches[1] }
+}
+
+# Generates a local self-signed CA + server + client certificate chain for
+# RavenDB's TLS requirement, writing it into k8s/ravendb/certs/. Skipped
+# entirely if a chain is already present there -- these files are gitignored
+# and meant to be reused across runs (or hand-generated once), never silently
+# regenerated on top of an existing chain.
+#
+# Extensions match what the RavenDB Kubernetes Operator requires (verified
+# working previously in this repo): the CA needs
+# basicConstraints=CA:TRUE + keyUsage=keyCertSign,cRLSign; server/client certs
+# need keyUsage=digitalSignature,keyEncipherment +
+# extendedKeyUsage=serverAuth (server) / clientAuth (client), with the server
+# cert's SAN list covering every active node's plain and "-tcp" hostname.
+# PFX files are packaged with -legacy (SHA1/3DES) since the operator can't
+# read openssl 3.x's SHA-256 PKCS12 default ("pkcs12: unknown digest
+# algorithm"). If openssl's -legacy flag behaves differently on the version
+# that ends up installed, re-verify the operator actually accepts the
+# generated .pfx files (kubectl describe ravendbcluster / kubectl logs).
+function Ensure-RavenDbCerts {
+    param([string]$CertsDir, [string[]]$NodeTags)
+
+    $required = @("ca.crt", "server.pfx", "client.pfx")
+    $allPresent = $true
+    foreach ($f in $required) {
+        if (-not (Test-Path "$CertsDir\$f")) { $allPresent = $false; break }
+    }
+    if ($allPresent) {
+        Write-Ok "RavenDB TLS certs already present in k8s/ravendb/certs -- reusing"
+        return
+    }
+
+    if (-not (Ensure-CliTool "openssl" "FireDaemon.OpenSSL" "OpenSSL")) {
+        Write-Host "  ERROR: openssl is required to generate RavenDB TLS certs." -ForegroundColor Red
+        exit 1
+    }
+
+    New-Item -ItemType Directory -Force -Path $CertsDir | Out-Null
+    Write-Host "  Generating self-signed RavenDB TLS chain in k8s/ravendb/certs..." -ForegroundColor Gray
+
+    $sanEntries = ($NodeTags | ForEach-Object { "DNS:$_.hiddencity.local,DNS:$_-tcp.hiddencity.local" }) -join ","
+
+    @"
+[req]
+distinguished_name = dn
+x509_extensions = ext
+[dn]
+[ext]
+basicConstraints = critical, CA:TRUE
+keyUsage = critical, keyCertSign, cRLSign
+"@ | Set-Content "$CertsDir\ca-ext.cnf" -Encoding utf8
+
+    @"
+[req]
+distinguished_name = dn
+req_extensions = ext
+[dn]
+[ext]
+subjectAltName = $sanEntries
+keyUsage = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth, clientAuth
+"@ | Set-Content "$CertsDir\server-san.cnf" -Encoding utf8
+
+    @"
+[req]
+distinguished_name = dn
+req_extensions = ext
+[dn]
+[ext]
+keyUsage = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = clientAuth
+"@ | Set-Content "$CertsDir\client-ext.cnf" -Encoding utf8
+
+    # CA
+    openssl genrsa -out "$CertsDir\ca.key" 4096 2>$null
+    openssl req -x509 -new -nodes -key "$CertsDir\ca.key" -sha256 -days 3650 `
+        -out "$CertsDir\ca.crt" -subj "/CN=RavenDB Demo CA" `
+        -extensions ext -config "$CertsDir\ca-ext.cnf"
+
+    # Server (CN = first node tag, full node list carried in the SAN instead)
+    openssl genrsa -out "$CertsDir\server.key" 2048 2>$null
+    openssl req -new -key "$CertsDir\server.key" -out "$CertsDir\server.csr" `
+        -subj "/CN=$($NodeTags[0]).hiddencity.local" -config "$CertsDir\server-san.cnf"
+    openssl x509 -req -in "$CertsDir\server.csr" -CA "$CertsDir\ca.crt" -CAkey "$CertsDir\ca.key" `
+        -CAcreateserial -out "$CertsDir\server.crt" -days 825 -sha256 `
+        -extfile "$CertsDir\server-san.cnf" -extensions ext
+
+    # Client
+    openssl genrsa -out "$CertsDir\client.key" 2048 2>$null
+    openssl req -new -key "$CertsDir\client.key" -out "$CertsDir\client.csr" `
+        -subj "/CN=hidden-city-client" -config "$CertsDir\client-ext.cnf"
+    openssl x509 -req -in "$CertsDir\client.csr" -CA "$CertsDir\ca.crt" -CAkey "$CertsDir\ca.key" `
+        -CAcreateserial -out "$CertsDir\client.crt" -days 825 -sha256 `
+        -extfile "$CertsDir\client-ext.cnf" -extensions ext
+
+    # Legacy-encoding PKCS12 -- required by the operator, see function comment above
+    openssl pkcs12 -export -legacy -out "$CertsDir\server.pfx" `
+        -inkey "$CertsDir\server.key" -in "$CertsDir\server.crt" `
+        -certfile "$CertsDir\ca.crt" -passout pass:
+    openssl pkcs12 -export -legacy -out "$CertsDir\client.pfx" `
+        -inkey "$CertsDir\client.key" -in "$CertsDir\client.crt" `
+        -certfile "$CertsDir\ca.crt" -passout pass:
+
+    if (-not (Test-Path "$CertsDir\server.pfx") -or -not (Test-Path "$CertsDir\client.pfx")) {
+        Write-Host "  ERROR: RavenDB cert generation failed -- see openssl output above." -ForegroundColor Red
+        exit 1
+    }
+    Write-Ok "RavenDB TLS chain generated"
 }
 
 # --- delete cluster shortcut ---
@@ -169,10 +291,79 @@ if (-not $cliReady) {
 }
 Write-Ok "kind, kubectl, helm, docker found"
 
-$totalSteps = 9
+$totalSteps = 10
 if ($SkipBuild)    { $totalSteps-- }
 if ($SkipOperator) { $totalSteps-- }
 $step = 0
+
+# --- secrets + certs preflight (no cluster required yet) ---
+# Everything below needs no live cluster: app secrets go straight into
+# k8s/secrets.local.yaml, and the RavenDB TLS chain is plain local files.
+# Gathering all of it first means the cluster/operator/RavenDB steps that
+# follow can't fail partway through for a missing key or cert.
+$step++
+Write-Step $step $totalSteps "Secrets & RavenDB TLS certs"
+
+$secretsFile = "$root\k8s\secrets.local.yaml"
+if (-not (Test-Path $secretsFile)) {
+    Copy-Item "$root\k8s\secrets.yaml" $secretsFile
+    Write-Warn "Created k8s/secrets.local.yaml from template"
+}
+
+$secretsContent = Get-Content $secretsFile -Raw
+
+# For each key, reuse a value already provided somewhere else (env var / repo-root
+# .env / license.json) before ever asking interactively. OPENAI_API_KEY is required;
+# TRAVELPAYOUTS_TOKEN is optional but still prompted for (Enter to skip), matching
+# the Local flow's start.ps1 behavior -- RAVENDB_LICENSE is optional and silent.
+$secretKeys = @(
+    @{ Name = "OPENAI_API_KEY";       Required = $true;  FallbackFile = $null;             Placeholder = "sk-..."; Prompt = $true },
+    @{ Name = "TRAVELPAYOUTS_TOKEN";  Required = $false; FallbackFile = $null;             Placeholder = "..."; Prompt = $true },
+    @{ Name = "RAVENDB_LICENSE";      Required = $false; FallbackFile = "license.json";    Placeholder = $null; Prompt = $false }
+)
+
+foreach ($k in $secretKeys) {
+    if ($secretsContent -notmatch "$($k.Name):\s+`"REPLACE_ME`"") {
+        Write-Ok "$($k.Name) already set in k8s/secrets.local.yaml"
+        continue
+    }
+
+    $found = Find-ExistingValue -Name $k.Name -FallbackFile $k.FallbackFile -Placeholder $k.Placeholder
+    if ($found) {
+        $secretsContent = Set-SecretPlaceholder $secretsContent $k.Name $found.Value
+        Write-Ok "$($k.Name) reused from $($found.Source) -- not asking again"
+        continue
+    }
+
+    if ($k.Prompt) {
+        Write-Host ""
+        if ($k.Required) {
+            Write-Host "  $($k.Name) is required for the agent to call GPT." -ForegroundColor Yellow
+        } else {
+            Write-Host "  [optional] $($k.Name) -- press Enter to skip." -ForegroundColor Yellow
+        }
+        $val = Read-Host "  Enter $($k.Name)"
+        if ($val) {
+            $secretsContent = Set-SecretPlaceholder $secretsContent $k.Name $val
+            Write-Ok "$($k.Name) saved to k8s/secrets.local.yaml"
+        } elseif ($k.Required) {
+            Write-Warn "$($k.Name) not set -- agent will fail to call GPT"
+        }
+    }
+}
+
+$secretsContent | Set-Content $secretsFile -Encoding utf8
+
+# RavenDB TLS cert chain -- generated locally if not already present (see
+# Ensure-RavenDbCerts above for exactly what's required and why).
+$ravenCertsDir = "$root\k8s\ravendb\certs"
+$ravenNodeTags = Get-RavenNodeTags
+Ensure-RavenDbCerts -CertsDir $ravenCertsDir -NodeTags $ravenNodeTags
+
+if (-not (Test-Path "$root\license.json")) {
+    Write-Warn "license.json not found at repo root -- the ravendb-license Secret can't be created."
+    Write-Warn "Save your RavenDB license JSON to license.json in the repo root and re-run."
+}
 
 # --- kind cluster ---
 $step++
@@ -184,6 +375,10 @@ if ($existing -contains $ClusterName) {
 } else {
     Write-Host "  Creating cluster (this takes ~1 min)..." -ForegroundColor Gray
     kind create cluster --name $ClusterName --config "$root\k8s\kind-config.yaml"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  ERROR: kind create cluster failed -- see output above." -ForegroundColor Red
+        exit 1
+    }
     Write-Ok "Cluster created"
 }
 kubectl config use-context "kind-$ClusterName" | Out-Null
@@ -203,6 +398,28 @@ Invoke-Quiet {
     kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/master/manifests/tigera-operator.yaml 2>$null
 } | Out-Null
 kubectl -n tigera-operator rollout status deployment/tigera-operator --timeout=90s
+
+# The operator Deployment reporting Ready doesn't mean its CRDs exist yet -- the
+# operator registers Installation/APIServer itself, asynchronously, a few seconds
+# after its pod passes its readiness probe. "kubectl wait --for=condition=
+# Established" only waits for a *condition* on an already-existing object -- if
+# the CRD doesn't exist at all yet it fails immediately with NotFound instead of
+# waiting for it to appear (verified: this raced and failed even with a bare
+# Established wait right after rollout status). So poll for each CRD to exist
+# first, then wait for Established.
+foreach ($crdName in @("installations.operator.tigera.io", "apiservers.operator.tigera.io")) {
+    $crdFound = $false
+    for ($i = 1; $i -le 30; $i++) {
+        Invoke-Quiet { kubectl get crd $crdName 2>$null } | Out-Null
+        if ($LASTEXITCODE -eq 0) { $crdFound = $true; break }
+        Start-Sleep 2
+    }
+    if (-not $crdFound) {
+        Write-Host "  ERROR: CRD $crdName never appeared -- Tigera operator install likely failed." -ForegroundColor Red
+        exit 1
+    }
+}
+kubectl wait --for=condition=Established crd/installations.operator.tigera.io crd/apiservers.operator.tigera.io --timeout=60s
 
 $calicoInstalled = Invoke-Quiet { kubectl get installation.operator.tigera.io default 2>$null }
 if (-not $calicoInstalled) {
@@ -230,97 +447,38 @@ spec: {}
     $calicoCr | kubectl create -f -
 }
 kubectl wait --for=condition=Ready node --all --timeout=180s | Out-Null
-Write-Ok "Calico ready"
-
-# --- secrets ---
-$step++
-Write-Step $step $totalSteps "Secrets"
-
-kubectl create namespace $NS --dry-run=client -o yaml | kubectl apply -f - | Out-Null
-
-$secretsFile = "$root\k8s\secrets.local.yaml"
-if (-not (Test-Path $secretsFile)) {
-    Copy-Item "$root\k8s\secrets.yaml" $secretsFile
-    Write-Warn "Created k8s/secrets.local.yaml from template"
-}
-
-$secretsContent = Get-Content $secretsFile -Raw
-
-# For each key, reuse a value already provided somewhere else (env var / repo-root
-# .env / license.json) before ever asking interactively. Only OPENAI_API_KEY is
-# required -- the others are left as "REPLACE_ME" if nothing is found, same as before.
-$secretKeys = @(
-    @{ Name = "OPENAI_API_KEY";       Required = $true;  FallbackFile = $null },
-    @{ Name = "TRAVELPAYOUTS_TOKEN";  Required = $false; FallbackFile = $null },
-    @{ Name = "RAVENDB_LICENSE";      Required = $false; FallbackFile = "license.json" }
-)
-
-foreach ($k in $secretKeys) {
-    if ($secretsContent -notmatch "$($k.Name):\s+`"REPLACE_ME`"") {
-        Write-Ok "$($k.Name) already set in k8s/secrets.local.yaml"
-        continue
-    }
-
-    $found = Find-ExistingValue -Name $k.Name -FallbackFile $k.FallbackFile
-    if ($found) {
-        $secretsContent = Set-SecretPlaceholder $secretsContent $k.Name $found.Value
-        Write-Ok "$($k.Name) reused from $($found.Source) -- not asking again"
-        continue
-    }
-
-    if ($k.Required) {
-        Write-Host ""
-        Write-Host "  $($k.Name) is required for the agent to call GPT." -ForegroundColor Yellow
-        $val = Read-Host "  Enter $($k.Name)"
-        if ($val) {
-            $secretsContent = Set-SecretPlaceholder $secretsContent $k.Name $val
-            Write-Ok "$($k.Name) saved to k8s/secrets.local.yaml"
-        } else {
-            Write-Warn "$($k.Name) not set -- agent will fail to call GPT"
-        }
-    }
-}
-
-$secretsContent | Set-Content $secretsFile -Encoding utf8
-
-# RavenDB cert/license secrets are NOT auto-generated here. openssl-generated
-# certs do work (verified) -- server/client certs need
-# keyUsage=digitalSignature,keyEncipherment + extendedKeyUsage=serverAuth
-# (client: clientAuth), the CA needs
-# basicConstraints=CA:TRUE + keyUsage=keyCertSign,cRLSign, and PFX files must
-# use legacy SHA1/3DES encoding (openssl 3.x's SHA-256 default PKCS12 isn't
-# readable by the operator: "pkcs12: unknown digest algorithm"). That's still
-# manual because it's security-sensitive material this script shouldn't
-# silently fabricate -- check for the four generic secrets the ravendb-cluster
-# chart expects (k8s/ravendb/values.yaml) and stop with exact instructions if
-# any are missing.
-$requiredRavenSecrets = @(
-    @{ Name = "ravendb-license";     Hint = "kubectl create secret generic ravendb-license -n $NS --from-file=license.json=<path-to-license.json>" },
-    @{ Name = "ravendb-cert";        Hint = "kubectl create secret generic ravendb-cert -n $NS --from-file=server.pfx=<path-to-server.pfx>" },
-    @{ Name = "ravendb-ca-cert";     Hint = "kubectl create secret generic ravendb-ca-cert -n $NS --from-file=ca.crt=<path-to-ca.crt>" },
-    @{ Name = "ravendb-client-cert"; Hint = "kubectl create secret generic ravendb-client-cert -n $NS --from-file=client.pfx=<path-to-client.pfx>" }
-)
-$missingRaven = @()
-foreach ($s in $requiredRavenSecrets) {
-    Invoke-Quiet { kubectl get secret $s.Name -n $NS 2>$null } | Out-Null
-    if ($LASTEXITCODE -ne 0) { $missingRaven += $s }
-}
-if ($missingRaven.Count -gt 0) {
-    Write-Host ""
-    Write-Warn "Missing RavenDB cert/license secrets in namespace '$NS':"
-    foreach ($s in $missingRaven) {
-        Write-Host "    - $($s.Name)" -ForegroundColor Yellow
-        Write-Host "        $($s.Hint)" -ForegroundColor Gray
-    }
-    Write-Host ""
-    Write-Host "  Generate these with openssl (CA + server cert with all node SANs +" -ForegroundColor Yellow
-    Write-Host "  client cert -- see the comment above this check for the exact extensions" -ForegroundColor Yellow
-    Write-Host "  and legacy PKCS12 flags needed), or via RavenDB's Setup Wizard, then re-run" -ForegroundColor Yellow
-    Write-Host "  this script with -SkipBuild -SkipOperator to skip straight to cluster deploy." -ForegroundColor Yellow
-    Write-Host "  See: https://github.com/ravendb/ravendb-operator/tree/main/examples/tls/selfsigned" -ForegroundColor Gray
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  ERROR: nodes did not become Ready -- Calico CNI install likely failed." -ForegroundColor Red
     exit 1
 }
-Write-Ok "RavenDB license/cert secrets present"
+Write-Ok "Calico ready"
+
+# --- namespace + k8s Secret objects (needs the cluster to exist) ---
+$step++
+Write-Step $step $totalSteps "Applying secrets to the cluster"
+
+kubectl create namespace $NS --dry-run=client -o yaml | kubectl apply -f - | Out-Null
+kubectl apply -f $secretsFile | Out-Null
+Write-Ok "hidden-city-secrets applied"
+
+# RavenDB cert/license secrets, created (idempotently) from the local files
+# gathered in the preflight step above -- no more manual kubectl instructions.
+$ravenSecrets = @(
+    @{ Name = "ravendb-license";     SourceFile = "$root\license.json";           FromFile = "license.json" },
+    @{ Name = "ravendb-cert";        SourceFile = "$ravenCertsDir\server.pfx";    FromFile = "server.pfx" },
+    @{ Name = "ravendb-ca-cert";     SourceFile = "$ravenCertsDir\ca.crt";        FromFile = "ca.crt" },
+    @{ Name = "ravendb-client-cert"; SourceFile = "$ravenCertsDir\client.pfx";    FromFile = "client.pfx" }
+)
+foreach ($s in $ravenSecrets) {
+    if (-not (Test-Path $s.SourceFile)) {
+        Write-Warn "Skipping secret $($s.Name) -- source file missing: $($s.SourceFile)"
+        continue
+    }
+    $fromFileArg = "--from-file=$($s.FromFile)=$($s.SourceFile)"
+    $yaml = kubectl create secret generic $s.Name -n $NS $fromFileArg --dry-run=client -o yaml
+    $yaml | kubectl apply -f - | Out-Null
+}
+Write-Ok "RavenDB license/cert secrets applied"
 
 # --- docker build ---
 if (-not $SkipBuild) {
@@ -343,6 +501,7 @@ if (-not $SkipOperator) {
     Write-Host "  Installing cert-manager ($CertManagerVersion)..." -ForegroundColor Gray
     kubectl apply -f "https://github.com/cert-manager/cert-manager/releases/download/$CertManagerVersion/cert-manager.yaml"
     kubectl wait --for=condition=Available deployment --all -n cert-manager --timeout=120s
+    if ($LASTEXITCODE -ne 0) { Write-Host "  ERROR: cert-manager did not become Available in time." -ForegroundColor Red; exit 1 }
     Write-Ok "cert-manager ready"
 
     Write-Host "  Installing ingress-nginx (kind provider)..." -ForegroundColor Gray
@@ -351,6 +510,7 @@ if (-not $SkipOperator) {
         --for=condition=ready pod `
         --selector=app.kubernetes.io/component=controller `
         --timeout=120s
+    if ($LASTEXITCODE -ne 0) { Write-Host "  ERROR: ingress-nginx controller pod did not become ready in time." -ForegroundColor Red; exit 1 }
     Write-Ok "ingress-nginx ready"
 
     Write-Host "  Adding RavenDB operator Helm repo..." -ForegroundColor Gray
@@ -360,8 +520,11 @@ if (-not $SkipOperator) {
     Write-Host "  Installing RavenDB Kubernetes Operator..." -ForegroundColor Gray
     helm upgrade --install ravendb-operator ravendb-operator/ravendb-operator `
         -n ravendb-operator-system --create-namespace
+    if ($LASTEXITCODE -ne 0) { Write-Host "  ERROR: helm install of ravendb-operator failed." -ForegroundColor Red; exit 1 }
     kubectl rollout status deployment -n ravendb-operator-system -l app.kubernetes.io/name=ravendb-operator --timeout=120s
+    if ($LASTEXITCODE -ne 0) { Write-Host "  ERROR: ravendb-operator deployment did not roll out in time." -ForegroundColor Red; exit 1 }
     kubectl wait --for=condition=Established crd/ravendbclusters.ravendb.ravendb.io --timeout=60s
+    if ($LASTEXITCODE -ne 0) { Write-Host "  ERROR: ravendbclusters CRD was not Established in time." -ForegroundColor Red; exit 1 }
     Write-Ok "Operator ready"
 }
 
@@ -370,6 +533,7 @@ $step++
 Write-Step $step $totalSteps "Installing RavenDB cluster  (helm upgrade --install ravendb-cluster ...)"
 helm upgrade --install ravendb-cluster ravendb-operator/ravendb-cluster `
     -n $NS --create-namespace -f "$root\k8s\ravendb\values.yaml"
+if ($LASTEXITCODE -ne 0) { Write-Host "  ERROR: helm install of ravendb-cluster failed." -ForegroundColor Red; exit 1 }
 Write-Ok "RavenDB cluster chart applied"
 
 # --- CoreDNS: make each node's public hostname resolve inside the cluster ---
@@ -384,14 +548,12 @@ Write-Ok "RavenDB cluster chart applied"
 $step++
 Write-Step $step $totalSteps "Configuring CoreDNS for RavenDB node hostnames"
 
-$nodeTags = Get-Content "$root\k8s\ravendb\values.yaml" |
-    Where-Object { $_ -match '^\s*-\s*tag:\s*(\S+)' -and $_ -notmatch '^\s*#' } |
-    ForEach-Object { $Matches[1] }
+$nodeTags = Get-RavenNodeTags
 
 $hostsLines = @()
 foreach ($tag in $nodeTags) {
     $svcIp = $null
-    for ($i = 1; $i -le 15; $i++) {
+    for ($i = 1; $i -le 45; $i++) {
         $svcIp = Invoke-Quiet { kubectl get svc "ravendb-$tag" -n $NS -o jsonpath='{.spec.clusterIP}' 2>$null }
         if ($svcIp) { break }
         Start-Sleep 2
@@ -486,6 +648,7 @@ if ($ravenReady) {
 $step++
 Write-Step $step $totalSteps "Waiting for agent deployment"
 kubectl rollout status deployment/agent -n $NS --timeout=120s
+if ($LASTEXITCODE -ne 0) { Write-Host "  ERROR: agent deployment did not roll out in time." -ForegroundColor Red; exit 1 }
 Write-Ok "Agent deployment ready"
 
 # --- port-forwards ---
@@ -498,9 +661,7 @@ Write-Ok "Agent deployment ready"
 # either stealing the other's port.
 Write-Host "`n  Starting port-forwards..." -ForegroundColor Gray
 
-$firstNodeTag = (Get-Content "$root\k8s\ravendb\values.yaml" |
-    Where-Object { $_ -match '^\s*-\s*tag:\s*(\S+)' -and $_ -notmatch '^\s*#' } |
-    ForEach-Object { $Matches[1] } | Select-Object -First 1)
+$firstNodeTag = (Get-RavenNodeTags | Select-Object -First 1)
 
 $pfAgent = Start-Process kubectl `
     -ArgumentList @("port-forward", "svc/agent-svc", "8000:80", "-n", $NS) `

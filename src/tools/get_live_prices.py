@@ -26,6 +26,7 @@ import httpx
 from src.db.client import doc_to_dict, get_store, load_airport_names, put_document
 from src.db.expiration import expires_at
 from src.db.models import RouteDocument, TypicalPrice
+from src.tools.travelpayouts_status import is_valid
 
 log = logging.getLogger(__name__)
 
@@ -149,6 +150,21 @@ async def get_live_prices(
     date: Optional[str] = None,
     max_results: int = _DEFAULT_MAX_RESULTS,
 ) -> dict:
+    if is_valid() is False:
+        return {
+            "routes": [],
+            "count": 0,
+            "error": "Travelpayouts token is invalid (401) — live price lookups are disabled. "
+            "Update TRAVELPAYOUTS_TOKEN in Profile → API keys & tokens.",
+        }
+    if not os.environ.get("TRAVELPAYOUTS_TOKEN"):
+        return {
+            "routes": [],
+            "count": 0,
+            "error": "Travelpayouts token is not configured — live price lookups are disabled. "
+            "Add TRAVELPAYOUTS_TOKEN in Profile → API keys & tokens.",
+        }
+
     origin = origin.upper()
     destination = destination.upper() if destination else None
     if not date:

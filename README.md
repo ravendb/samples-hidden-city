@@ -83,6 +83,7 @@ Price drops → RavenDB Subscription ──push──▶ Worker → alert
 | **Document Expiration** | [`src/db/expiration.py`](src/db/expiration.py) | Price fields auto-expire after 20 min via `@expires` metadata — no manual TTL management |
 | **Attachments** | `src/tools/user_attachments.py`, `/profile` UI | Passport scan, bag photo, preference sheet (PDF) stored as binary blobs on the user doc — not indexed, retrieved whole, never inflating a query |
 | **Vector Search** | [`src/tools/search_routes.py`](src/tools/search_routes.py#L61-L113), [`src/db/geo.py`](src/db/geo.py) | Finds nearby-airport alternatives (~300 km radius) when no route is cached — one in-cluster query, no external geocoder, no separate vector store |
+| **Auto-Indexes (full-text)** | [`src/tools/resolve_airports.py`](src/tools/resolve_airports.py) | `.search()` on `Airports.city` with no static index defined — RavenDB creates the index on the fly the first time it runs. Powers the single-API-call fast path (see below) |
 
 **How Document Expiration works here:**
 - [`ensure_expiration_enabled()`](src/db/expiration.py#L57-L58) turns the
@@ -183,6 +184,30 @@ airports are added), RavenDB answers it with one vector query, locally, inside
 the cluster. Zero extra calls to an external geocoding API, and zero separate
 vector store (the pgvector box in Stage 3) — it's the same store already
 holding route and session documents.
+
+**How Auto-Indexes power the single-API-call fast path:**
+- Every turn normally costs **two** OpenAI calls: one where the model decides
+  to call `search_routes`, one where it sees the result and writes the reply —
+  the system prompt and tool schemas (~1100 tokens combined) get billed again
+  on each. For a plain "from X to Y" message, that's pure overhead.
+- [`resolve_origin_destination()`](src/tools/resolve_airports.py) tries to
+  resolve both airports *before* calling OpenAI at all: a literal 3-letter
+  code is checked directly (`session.load("airports/WAW")`); a city name goes
+  through `session.query_collection("Airports").search("city", phrase)`.
+  Neither field had a static index defined for it — RavenDB creates one (an
+  **Auto-Index**) automatically the first time a query needs it, and reuses
+  it on every call after that.
+- If **both** sides resolve to exactly one airport, [`src/agent/loop.py`](src/agent/loop.py)'s
+  `_try_fast_path()` calls `search_routes` itself, injects the result into the
+  prompt, and makes a **single** OpenAI call with no tools offered — measured
+  at 752 tokens for "Warsaw to Dubai" vs. ~2100 for the normal two-call path.
+- If either side is ambiguous (multiple airports match — "London" resolves to
+  both LHR and LGW in this fixture data) or nothing matches, resolution
+  returns `None` and the turn falls back to the normal tool-calling loop,
+  unchanged. No airport is ever guessed.
+- This is a deliberate, narrow exception to CLAUDE.md's "the model decides
+  what to fetch" rule — see the note there for why it's scoped this tightly
+  rather than applied more broadly.
 
 ---
 

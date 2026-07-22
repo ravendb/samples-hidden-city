@@ -14,8 +14,10 @@ from typing import AsyncGenerator
 from openai import AsyncOpenAI
 
 from src.agent.prompts import SYSTEM_PROMPT
+from src.db.client import get_store
 from src.tools.definitions import select_tools
 from src.tools.dispatcher import dispatch_tool
+from src.tools.resolve_airports import resolve_origin_destination
 
 log = logging.getLogger(__name__)
 
@@ -114,6 +116,35 @@ def _build_system_content(user_id: str, session_id: str, preferences: dict | Non
     )
 
 
+async def _try_fast_path(
+    user_message: str, preferences: dict | None
+) -> tuple[dict, dict] | None:
+    """Single-call fast path: resolve an unambiguous "from X to Y" message via
+    RavenDB (src/tools/resolve_airports.py) and pre-fetch search_routes
+    ourselves, so the model never has to spend a tool-calling round trip
+    deciding to call it. Returns (resolved, tool_result) on success; None
+    (ambiguous message, no match, or any failure) means the caller falls back
+    to the normal multi-turn tool-calling loop below, unchanged."""
+    try:
+        resolved = resolve_origin_destination(get_store(), user_message)
+        if not resolved:
+            return None
+        tool_result = await dispatch_tool("search_routes", resolved, preferences=preferences)
+        return resolved, tool_result
+    except Exception:
+        log.exception("Fast-path resolution/search failed -- falling back to tool-calling flow")
+        return None
+
+
+def _build_fast_path_content(user_message: str, resolved: dict, tool_result: dict) -> str:
+    result_json = json.dumps(tool_result, default=str)
+    return (
+        f"{user_message}\n\n"
+        f"[search_routes({resolved['origin']}->{resolved['destination']}) already run, "
+        f"result: {result_json}]"
+    )
+
+
 async def run_agent(
     user_message: str,
     prior_turns: list[dict],
@@ -130,6 +161,39 @@ async def run_agent(
     """
     client = AsyncOpenAI()
     system_content = _build_system_content(user_id, session_id, preferences)
+
+    fast_path = await _try_fast_path(user_message, preferences)
+    if fast_path is not None:
+        resolved, tool_result = fast_path
+        user_content = _build_fast_path_content(user_message, resolved, tool_result)
+        messages = (
+            [{"role": "system", "content": system_content}]
+            + prior_turns
+            + [{"role": "user", "content": user_content}]
+        )
+        response = await client.chat.completions.create(
+            model=os.getenv("LLM_MODEL", _DEFAULT_MODEL),
+            max_tokens=MAX_RESPONSE_TOKENS,
+            messages=messages,
+        )
+        text = response.choices[0].message.content
+        if text is not None:
+            known_data = system_content + user_content
+            ungrounded = _find_ungrounded_numbers(text, known_data)
+            if ungrounded:
+                warning = f"reply contains numbers not seen in tool output or preferences: {ungrounded}"
+                log.warning(warning)
+            return AgentResult(
+                response=text,
+                input_tokens=response.usage.prompt_tokens,
+                output_tokens=response.usage.completion_tokens,
+                tool_calls=1,
+                iterations=1,
+                grounding_warnings=[warning] if ungrounded else [],
+            )
+        # No text content (unexpected without tools offered) -- fall through to
+        # the normal loop below rather than return something broken.
+
     tools = select_tools(user_message)
     messages = (
         [{"role": "system", "content": system_content}]
@@ -251,6 +315,63 @@ async def stream_agent(
     """Streaming variant -- yields SSE-formatted strings for /chat/stream."""
     client = AsyncOpenAI()
     system_content = _build_system_content(user_id, session_id, preferences)
+
+    def sse(data: dict) -> str:
+        return f"data: {json.dumps(data)}\n\n"
+
+    # Same single-call fast path as run_agent -- see _try_fast_path's docstring.
+    fast_path = await _try_fast_path(user_message, preferences)
+    if fast_path is not None:
+        resolved, tool_result = fast_path
+        yield sse({"type": "tool_call", "name": "search_routes"})
+        user_content = _build_fast_path_content(user_message, resolved, tool_result)
+        fp_messages = (
+            [{"role": "system", "content": system_content}]
+            + prior_turns
+            + [{"role": "user", "content": user_content}]
+        )
+        fp_stream = await client.chat.completions.create(
+            model=os.getenv("LLM_MODEL", _DEFAULT_MODEL),
+            max_tokens=MAX_RESPONSE_TOKENS,
+            messages=fp_messages,
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+        fp_content: list[str] = []
+        fp_input, fp_output = 0, 0
+        async for chunk in fp_stream:
+            if chunk.usage:
+                fp_input += chunk.usage.prompt_tokens
+                fp_output += chunk.usage.completion_tokens
+                continue
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if delta.content:
+                fp_content.append(delta.content)
+                yield sse({"type": "delta", "text": delta.content})
+
+        final_text = "".join(fp_content)
+        if final_text:
+            known_data = system_content + user_content
+            ungrounded = _find_ungrounded_numbers(final_text, known_data)
+            if ungrounded:
+                log.warning(
+                    "reply contains numbers not seen in tool output or preferences: %s",
+                    ungrounded,
+                )
+            yield sse({
+                "type": "done",
+                "response": final_text,
+                "input_tokens": fp_input,
+                "output_tokens": fp_output,
+                "total_tokens": fp_input + fp_output,
+                "tool_calls": 1,
+                "grounding_warnings": ungrounded,
+            })
+            return
+        # No content streamed (unexpected) -- fall through to the normal loop below.
+
     tools = select_tools(user_message)
     messages = (
         [{"role": "system", "content": system_content}]
@@ -260,9 +381,6 @@ async def stream_agent(
     total_input, total_output, tool_calls_count = 0, 0, 0
     tool_tokens_used = 0  # cumulative across the WHOLE turn — see run_agent
     tool_result_texts: list[str] = []
-
-    def sse(data: dict) -> str:
-        return f"data: {json.dumps(data)}\n\n"
 
     for iteration in range(1, MAX_ITERATIONS + 1):
         accumulated_content: list[str] = []

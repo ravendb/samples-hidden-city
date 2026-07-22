@@ -53,7 +53,10 @@
       "Bash(disown)",
       "Bash(timeout 10 curl -s http://localhost:8000/health -w \"\\\\nHTTP_CODE=%{http_code}\\\\n\")",
       "Bash(kubectl exec -n hidden-city agent-db5974c5-dljfs -- python -c ' *)",
-      "Bash(.venv/Scripts/python.exe -c ' *)"
+      "Bash(.venv/Scripts/python.exe -c ' *)",
+      "Bash(/c/Users/weronika.kolodziej/AppData/Local/Microsoft/WinGet/Packages/Kubernetes.kind_Microsoft.Winget.Source_8wekyb3d8bbwe/kind.exe load *)",
+      "Bash(timeout 20 curl -s -X POST http://localhost:8000/chat -H 'Content-Type: application/json' -d '{\"user_id\":\"fastpathtest\",\"session_id\":\"fp-1\",\"message\":\"Find me cheap flights from Warsaw to London\"}' -w '\\\\nHTTP=%{http_code}\\\\n')",
+      "PowerShell(& \"c:\\\\Users\\\\weronika.kolodziej\\\\samples-hidden-city\\\\start-k8s.ps1\" -DeleteCluster)"
     ],
     "additionalDirectories": [
       "C:\\Users\\WERONI~1.KOL\\AppData\\Local\\Temp\\claude\\c--Users-weronika-kolodziej-samples-hidden-city\\a9863e36-55e1-40a8-aaf7-9f57959c99d1\\scratchpad\\certtest"

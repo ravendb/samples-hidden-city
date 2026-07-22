@@ -10,11 +10,10 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 
-_ENV_LOCAL = Path(__file__).parent.parent.parent / ".env.local"
+_ENV_FILE = Path(__file__).parent.parent.parent / ".env"
 _LICENSE_FILE = Path(__file__).parent.parent.parent / "license.json"
 
-load_dotenv(override=True)
-load_dotenv(_ENV_LOCAL, override=True)
+load_dotenv(_ENV_FILE, override=True)
 from pydantic import BaseModel
 
 from src.agent.loop import AgentResult, run_agent, stream_agent
@@ -24,6 +23,8 @@ from src.db.seed import seed_if_empty
 from src.tools.get_user_profile import DEFAULT_PREFERENCES, build_preferences
 from src.tools.get_user_profile import get_user_profile as _get_user_profile
 from src.tools.save_conversation import persist_turn
+from src.tools.travelpayouts_status import is_valid as _travelpayouts_token_is_valid
+from src.tools.travelpayouts_status import set_valid as _set_travelpayouts_token_valid
 from src.tools.update_user_profile import update_user_profile as _update_user_profile
 from src.tools.user_attachments import (
     ATTACHMENT_TYPES,
@@ -62,13 +63,22 @@ async def _startup() -> None:
 
     token = os.getenv("TRAVELPAYOUTS_TOKEN")
     if token:
-        try:
-            from src.scraper.run import run as _run_scraper
-            await _run_scraper()
-        except Exception as _e:
-            print(f"  Travelpayouts → failed: {_e}", flush=True)
-            log.exception("Travelpayouts fetch failed at startup")
+        from src.scraper.travelpayouts import validate_token
+
+        token_ok = await validate_token(token)
+        _set_travelpayouts_token_valid(token_ok)
+        if not token_ok:
+            print("  Travelpayouts → token rejected (401 Unauthorized) — live price lookups disabled.", flush=True)
+            print("  Travelpayouts → fix TRAVELPAYOUTS_TOKEN in Profile → API keys & tokens, or in .env.", flush=True)
+        else:
+            try:
+                from src.scraper.run import run as _run_scraper
+                await _run_scraper()
+            except Exception as _e:
+                print(f"  Travelpayouts → failed: {_e}", flush=True)
+                log.exception("Travelpayouts fetch failed at startup")
     else:
+        _set_travelpayouts_token_valid(None)
         print("  Travelpayouts → TRAVELPAYOUTS_TOKEN not set, skipping", flush=True)
     print("", flush=True)
 
@@ -153,42 +163,67 @@ class SetupRequest(BaseModel):
     travelpayouts_token: str | None = None
 
 
+_ENV_EXAMPLE_PLACEHOLDERS = {
+    # Literal values from .env.example -- a fresh .env copied from that template
+    # carries these verbatim, so a plain truthiness check reports them as "set".
+    "OPENAI_API_KEY": "sk-...",
+    "TRAVELPAYOUTS_TOKEN": "...",
+}
+
+
+def _is_key_configured(name: str) -> bool:
+    value = os.getenv(name)
+    return bool(value) and value != _ENV_EXAMPLE_PLACEHOLDERS.get(name)
+
+
 @app.get("/api/setup/status")
 async def api_setup_status() -> dict:
     """Report which setup keys are already configured, so the wizard can skip them."""
     return {
-        "openai_api_key_set": bool(os.getenv("OPENAI_API_KEY")),
+        "openai_api_key_set": _is_key_configured("OPENAI_API_KEY"),
         "ravendb_license_set": bool(os.getenv("RAVENDB_LICENSE")) or _LICENSE_FILE.exists(),
-        "travelpayouts_set": bool(os.getenv("TRAVELPAYOUTS_TOKEN")),
+        "travelpayouts_set": _is_key_configured("TRAVELPAYOUTS_TOKEN"),
+        "travelpayouts_valid": _travelpayouts_token_is_valid(),
     }
+
+
+def _set_env_value(key: str, value: str) -> None:
+    """Update one KEY=value line in .env in place, preserving every other line
+    (comments, unrelated keys) instead of rewriting the whole file."""
+    lines = _ENV_FILE.read_text(encoding="utf-8").splitlines() if _ENV_FILE.exists() else []
+    for i, line in enumerate(lines):
+        if line.startswith(f"{key}="):
+            lines[i] = f"{key}={value}"
+            break
+    else:
+        lines.append(f"{key}={value}")
+    _ENV_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 @app.post("/api/setup")
 async def api_setup(body: SetupRequest) -> dict:
-    """Persist API keys to .env.local (never committed — in .gitignore)."""
-    # Read existing entries so we can merge
-    existing: dict[str, str] = {}
-    if _ENV_LOCAL.exists():
-        for line in _ENV_LOCAL.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if "=" in line and not line.startswith("#"):
-                k, _, v = line.partition("=")
-                existing[k.strip()] = v.strip()
-
+    """Persist API keys to .env (repo root, never committed — in .gitignore)."""
     if body.openai_api_key:
-        existing["OPENAI_API_KEY"] = body.openai_api_key
+        _set_env_value("OPENAI_API_KEY", body.openai_api_key)
         os.environ["OPENAI_API_KEY"] = body.openai_api_key
 
     if body.ravendb_license:
-        existing["RAVENDB_LICENSE"] = body.ravendb_license
+        _set_env_value("RAVENDB_LICENSE", body.ravendb_license)
         os.environ["RAVENDB_LICENSE"] = body.ravendb_license
 
     if body.travelpayouts_token:
-        existing["TRAVELPAYOUTS_TOKEN"] = body.travelpayouts_token
-        os.environ["TRAVELPAYOUTS_TOKEN"] = body.travelpayouts_token
+        from src.scraper.travelpayouts import validate_token
 
-    lines = [f"{k}={v}" for k, v in existing.items()]
-    _ENV_LOCAL.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        if not await validate_token(body.travelpayouts_token):
+            raise HTTPException(
+                status_code=400,
+                detail="Travelpayouts token rejected (401 Unauthorized) — "
+                "check the value at travelpayouts.com → API access.",
+            )
+        _set_env_value("TRAVELPAYOUTS_TOKEN", body.travelpayouts_token)
+        os.environ["TRAVELPAYOUTS_TOKEN"] = body.travelpayouts_token
+        _set_travelpayouts_token_valid(True)
+
     return {"status": "ok"}
 
 
