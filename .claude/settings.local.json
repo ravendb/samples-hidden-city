@@ -52,7 +52,8 @@
       "Bash(kubectl port-forward *)",
       "Bash(disown)",
       "Bash(timeout 10 curl -s http://localhost:8000/health -w \"\\\\nHTTP_CODE=%{http_code}\\\\n\")",
-      "Bash(kubectl exec -n hidden-city agent-db5974c5-dljfs -- python -c ' *)"
+      "Bash(kubectl exec -n hidden-city agent-db5974c5-dljfs -- python -c ' *)",
+      "Bash(.venv/Scripts/python.exe -c ' *)"
     ],
     "additionalDirectories": [
       "C:\\Users\\WERONI~1.KOL\\AppData\\Local\\Temp\\claude\\c--Users-weronika-kolodziej-samples-hidden-city\\a9863e36-55e1-40a8-aaf7-9f57959c99d1\\scratchpad\\certtest"

@@ -132,8 +132,13 @@ _FALLBACK_ORIGINS = sorted(set(_EUROPE_CAPITALS + _ASIA_CAPITALS + _US_CAPITALS)
 
 
 def get_origins(store) -> list[str]:
-    """Distinct departure airports across all saved user profiles, or the fallback list if none exist yet."""
-    origins: set[str] = set()
+    """Distinct departure airports across all saved user profiles, ALWAYS unioned with
+    _FALLBACK_ORIGINS — not just used as a cold-start-only fallback. The capitals list
+    exists to guarantee broad demo coverage regardless of what's been searched before;
+    if it only applied "when no profile exists yet", a single saved profile (even a
+    stray test/debug one) would silently shrink every future scrape back down to just
+    that one airport, undoing the whole point of a wide baseline."""
+    origins: set[str] = set(_FALLBACK_ORIGINS)
     with store.open_session() as session:
         users = [doc_to_dict(u) for u in session.query_collection("Users").take(10_000)]
 
@@ -144,7 +149,7 @@ def get_origins(store) -> list[str]:
         for airport in user.get("departure_airports", []):
             origins.add(airport.upper())
 
-    return sorted(origins) if origins else list(_FALLBACK_ORIGINS)
+    return sorted(origins)
 
 
 def _resolve_hubs(
@@ -176,7 +181,17 @@ async def run() -> None:
 
     for origin in origins:
         print(f"  Travelpayouts → fetching {origin}...", flush=True)
-        fetched = await fetch_cheapest_from(origin, token)
+        try:
+            fetched = await fetch_cheapest_from(origin, token)
+        except Exception:
+            # One origin rejected by Travelpayouts (bad request, rate limit, timeout)
+            # must not lose every remaining origin in the batch -- with ~85 origins
+            # now in _FALLBACK_ORIGINS, a single bad one (e.g. FRU 400s on this
+            # endpoint) used to abort the whole run before this try/except existed,
+            # silently skipping everything alphabetically after it.
+            log.exception("Fetch failed for origin %s — skipping, continuing with the rest", origin)
+            print(f"  Travelpayouts → {origin}: failed, skipping", flush=True)
+            continue
         log.info("Fetched %d routes from %s", len(fetched), origin)
 
         routes = _resolve_hubs(origin, fetched, airport_coords)

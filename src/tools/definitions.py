@@ -10,19 +10,12 @@ TOOL_DEFINITIONS = [
         "function": {
             "name": "search_routes",
             "description": (
-                "Search RavenDB for flight routes (direct or hidden city). For a single "
-                "destination (or the hidden-city direct fare), this already refreshes "
-                "stale/missing data itself via Travelpayouts — you don't need to call "
-                "get_live_prices afterward for that pair; result still says stale=false once "
-                "refreshed. budget_max, budget_currency, countries_of_interest, carry_on_only "
-                "auto-fill from saved preferences unless overridden. If no direct route is "
-                "found, returns EITHER connecting_hubs (up to 3 via-hub suggestions, each with "
-                "leg1_price_usd, leg2_price_usd, total_price_usd_min — two separately cached "
-                "routes, NOT a single fare and NOT a hidden city opportunity) OR "
-                "nearby_alternatives (unsearched near_origin/near_destination lists, each with "
-                "airport/city/country/distance_km, found via geographic proximity search) — "
-                "never both. Ask before searching a nearby_alternatives airport, never mix the "
-                "two lists."
+                "Search RavenDB for flight routes (direct or hidden city), auto-refreshing "
+                "stale/missing data via Travelpayouts for a single destination or hidden-city "
+                "fare. budget_max, budget_currency, countries_of_interest, carry_on_only "
+                "auto-fill from saved preferences unless overridden. No direct route → returns "
+                "connecting_hubs or nearby_alternatives (never both, see system rules for how "
+                "to present each)."
             ),
             "parameters": {
                 "type": "object",

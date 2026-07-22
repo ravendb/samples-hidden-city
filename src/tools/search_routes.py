@@ -87,17 +87,21 @@ def _nearby_alternatives(store, iata: str) -> list[dict]:
     on a hand-curated list, so it works for any airport, not just the handful
     that had a "nearby" entry manually filled in.
 
-    Deliberately no minimum_similarity floor: a fixed distance cutoff means
-    "nearby" silently comes back empty for any origin whose closest neighbours
-    happen to sit just past that line (e.g. Beijing's nearest real alternatives
-    are 900km+ away — a same-country pick, but well outside a "commuter
-    distance" cutoff). Instead this always ranks the _NEARBY_CANDIDATES nearest
-    airports by vector similarity — empty only means no other airport document
-    exists at all. The caller/model shows the real distance_km, so the user can
-    judge for themselves whether 900km is still useful — that's better than
-    silence. Returns the full ranked pool (not just the top 3) since the caller
-    filters by route availability first — the 3 nearest geographically aren't
-    necessarily the 3 nearest that actually go anywhere useful.
+    Deliberately no minimum_similarity floor on the vector search itself: a
+    fixed ANN cutoff means "nearby" silently comes back empty for any origin
+    whose closest neighbours happen to sit just past that line (e.g. Beijing's
+    nearest real alternatives are 900km+ away — a same-country pick). Instead
+    this always ranks the _NEARBY_CANDIDATES nearest airports by vector
+    similarity first. It DOES cap the result at _NEARBY_MAX_DISTANCE_KM,
+    though: in a sparse catalog, the nearest candidate that also happens to
+    have cached route data can be absurdly far out (Beijing's nearest catalog
+    entry with a route to Warsaw was Singapore, 4490km away) — presenting that
+    as a "nearby airport" is misleading regardless of how honestly the real
+    distance_km is labeled. Past that cap, it's a connecting-flight candidate,
+    not a substitute departure/arrival airport. Returns the full ranked pool
+    (not just the top 3) since the caller filters by route availability first —
+    the 3 nearest geographically aren't necessarily the 3 nearest that actually
+    go anywhere useful.
     """
     with store.open_session() as session:
         origin_doc = session.load(f"airports/{iata}")
@@ -127,6 +131,8 @@ def _nearby_alternatives(store, iata: str) -> list[dict]:
         distance_km = round(
             haversine_km(origin_coords["lat"], origin_coords["lng"], coords["lat"], coords["lng"])
         )
+        if distance_km > _NEARBY_MAX_DISTANCE_KM:
+            continue
         scored.append(
             {
                 "airport": c.get("iata"),
