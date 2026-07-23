@@ -43,6 +43,23 @@ _SETUP_PATH   = _CHAT_DIR / "setup.html"
 _PROFILE_PATH = _CHAT_DIR / "profile.html"
 
 
+async def _print_links_after_startup(host: str, port: str) -> None:
+    """Fires one event-loop tick after this coroutine is scheduled, which is
+    after uvicorn logs "Application startup complete." (it logs that line
+    synchronously right after the startup event handler returns, before the
+    loop gets back around to this task) -- so the links land at the bottom,
+    not buried under seeding/Travelpayouts scrape output further up."""
+    import asyncio
+
+    await asyncio.sleep(0.1)
+    ravendb_url = os.getenv("RAVENDB_URL", "http://localhost:8080")
+    print("\n  ── Links ──", flush=True)
+    print(f"  Chat UI         →  http://{host}:{port}/", flush=True)
+    print(f"  Swagger UI      →  http://{host}:{port}/docs", flush=True)
+    print(f"  RavenDB Studio  →  {ravendb_url}", flush=True)
+    print("", flush=True)
+
+
 @app.on_event("startup")
 async def _startup() -> None:
     import asyncio
@@ -50,7 +67,6 @@ async def _startup() -> None:
     host = os.getenv("HOST", "127.0.0.1")
     port = os.getenv("PORT", "8000")
     print("\n  Hidden City Flight Agent", flush=True)
-    print(f"  Chat UI  →  http://{host}:{port}/", flush=True)
     print("  DB       →  seeding check...", flush=True)
     try:
         loop = asyncio.get_event_loop()
@@ -81,6 +97,7 @@ async def _startup() -> None:
         _set_travelpayouts_token_valid(None)
         print("  Travelpayouts → TRAVELPAYOUTS_TOKEN not set, skipping", flush=True)
     print("", flush=True)
+    asyncio.create_task(_print_links_after_startup(host, port))
 
 
 class ChatRequest(BaseModel):
@@ -313,15 +330,22 @@ async def download_profile_attachment(attachment_type: str, user_id: str = "demo
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest) -> ChatResponse:
-    prior_turns, preferences = _load_conversation_context(request.user_id, request.session_id)
+    try:
+        prior_turns, preferences = _load_conversation_context(request.user_id, request.session_id)
 
-    result: AgentResult = await run_agent(
-        user_message=request.message,
-        prior_turns=prior_turns,
-        user_id=request.user_id,
-        session_id=request.session_id,
-        preferences=preferences,
-    )
+        result: AgentResult = await run_agent(
+            user_message=request.message,
+            prior_turns=prior_turns,
+            user_id=request.user_id,
+            session_id=request.session_id,
+            preferences=preferences,
+        )
+    except Exception as exc:
+        # Same external-actor boundary as dispatch_tool (src/tools/dispatcher.py) --
+        # a transient RavenDB or OpenAI failure here must not surface as a raw,
+        # unexplained 500 to the chat UI.
+        log.exception("chat request failed")
+        raise HTTPException(status_code=502, detail=f"Agent request failed: {exc}") from exc
 
     if result.tool_token_warnings:
         log.warning("Token budget warnings: %s", result.tool_token_warnings)
@@ -348,10 +372,12 @@ async def chat(request: ChatRequest) -> ChatResponse:
 @app.post("/chat/stream")
 async def chat_stream(request: ChatRequest) -> StreamingResponse:
     import json
-    prior_turns, preferences = _load_conversation_context(request.user_id, request.session_id)
 
     async def generate():
         try:
+            prior_turns, preferences = _load_conversation_context(
+                request.user_id, request.session_id
+            )
             async for chunk in stream_agent(
                 user_message=request.message,
                 prior_turns=prior_turns,
