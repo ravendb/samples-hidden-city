@@ -4,6 +4,7 @@ Session loading/saving happens here; the loop itself is stateless.
 """
 import logging
 import os
+import tempfile
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -41,6 +42,24 @@ _UI_PATH     = _CHAT_DIR / "index.html"
 _LANDING_PATH = _CHAT_DIR / "landing.html"
 _SETUP_PATH   = _CHAT_DIR / "setup.html"
 _PROFILE_PATH = _CHAT_DIR / "profile.html"
+
+
+_SCRAPE_MARKER = Path(tempfile.gettempdir()) / "hidden_city_last_scrape_ppid.txt"
+
+
+def _is_reload_restart() -> bool:
+    """True when this startup is a `--reload` worker respawn, not a genuine
+    fresh launch. uvicorn --reload keeps one supervisor process alive across
+    file-change restarts and only re-spawns the worker subprocess, so
+    os.getppid() in the worker stays constant across reloads and only
+    changes when a brand new supervisor (a real `start.ps1` run) starts --
+    that's what lets the full ~85-origin Travelpayouts scrape run once per
+    dev session instead of on every saved file."""
+    ppid = str(os.getppid())
+    if _SCRAPE_MARKER.exists() and _SCRAPE_MARKER.read_text().strip() == ppid:
+        return True
+    _SCRAPE_MARKER.write_text(ppid)
+    return False
 
 
 async def _print_links_after_startup(host: str, port: str) -> None:
