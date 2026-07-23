@@ -105,6 +105,8 @@ async def _startup() -> None:
         if not token_ok:
             print("  Travelpayouts → token rejected (401 Unauthorized) — live price lookups disabled.", flush=True)
             print("  Travelpayouts → fix TRAVELPAYOUTS_TOKEN in Profile → API keys & tokens, or in .env.", flush=True)
+        elif _is_reload_restart():
+            print("  Travelpayouts → skipping full scrape (--reload restart, already scraped this session)", flush=True)
         else:
             try:
                 from src.scraper.run import run as _run_scraper
@@ -295,11 +297,23 @@ class ProfileDetailsRequest(BaseModel):
     home_airport: str | None = None
     budget_max: float | None = None
     budget_currency: str | None = None
+    max_stops: int | None = None
+    departure_airports: list[str] | None = None
+    countries_of_interest: list[str] | None = None
+    destinations: list[str] | None = None
+    preferred_airlines: list[str] | None = None
+    loyalty_programs: list[str] | None = None
 
 
 @app.post("/api/profile/details")
 async def save_profile_details(body: ProfileDetailsRequest) -> dict:
-    """Save structured profile fields submitted from the Profile screen's form."""
+    """Save structured profile fields submitted from the Profile screen's form.
+
+    merge_lists=False: the form shows the user's full current list for each
+    field, so "Save" replaces it outright — unlike the update_user_profile LLM
+    tool, which only ever appends one newly-learned value at a time (see that
+    function's docstring).
+    """
     return await _update_user_profile(
         user_id=body.user_id,
         name=body.name,
@@ -307,6 +321,13 @@ async def save_profile_details(body: ProfileDetailsRequest) -> dict:
         home_airport=body.home_airport,
         budget_max=body.budget_max,
         budget_currency=body.budget_currency,
+        max_stops=body.max_stops,
+        departure_airports=body.departure_airports,
+        countries_of_interest=body.countries_of_interest,
+        destinations=body.destinations,
+        preferred_airlines=body.preferred_airlines,
+        loyalty_programs=body.loyalty_programs,
+        merge_lists=False,
     )
 
 

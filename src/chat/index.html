@@ -250,6 +250,7 @@
     <div id="quick-prompts">
       <button class="quick-prompt-btn" data-quick="anywhere">✈ Anywhere from home</button>
       <button class="quick-prompt-btn" data-quick="specific">📍 Search a specific route</button>
+      <button class="quick-prompt-btn" id="quick-profile-btn">📝 Fill in my profile</button>
     </div>
     <div id="input-area">
       <textarea id="user-input" placeholder="Ask about flights..." rows="1"></textarea>
@@ -553,6 +554,10 @@ quickPromptsEl.addEventListener('click', e => {
     inputEl.focus();
     inputEl.selectionStart = inputEl.selectionEnd = 18; // right after "from "
   }
+});
+
+document.getElementById('quick-profile-btn').addEventListener('click', () => {
+  window.location.href = '/profile';
 });
 
 function scrollBottom() {

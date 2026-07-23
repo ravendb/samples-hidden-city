@@ -173,6 +173,44 @@ html, body { min-height: 100vh; background: var(--bg); color: var(--text); font-
   </div>
 
   <div class="card">
+    <h2 class="card-title">Travel preferences</h2>
+    <p class="card-desc">
+      Comma-separated. These feed <code>search_routes</code> filtering and the hidden-city
+      scan the same way telling the agent in chat would.
+    </p>
+    <div class="field">
+      <label for="departure-airports-input">Departure airports</label>
+      <input type="text" id="departure-airports-input" placeholder="e.g. WAW, KRK" autocomplete="off" />
+    </div>
+    <div class="field">
+      <label for="countries-input">Countries of interest</label>
+      <input type="text" id="countries-input" placeholder="e.g. China, Japan" autocomplete="off" />
+    </div>
+    <div class="field">
+      <label for="destinations-input">Destinations</label>
+      <input type="text" id="destinations-input" placeholder="e.g. Beijing, Tokyo" autocomplete="off" />
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="airlines-input">Preferred airlines</label>
+        <input type="text" id="airlines-input" placeholder="e.g. LOT, Lufthansa" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label for="max-stops-input">Max stops</label>
+        <input type="number" id="max-stops-input" placeholder="e.g. 1" min="0" />
+      </div>
+    </div>
+    <div class="field">
+      <label for="loyalty-input">Loyalty programs</label>
+      <input type="text" id="loyalty-input" placeholder="e.g. Miles & More" autocomplete="off" />
+    </div>
+    <div class="save-row">
+      <button class="btn btn-primary" id="save-preferences-btn">Save preferences</button>
+      <span class="save-msg" id="preferences-msg"></span>
+    </div>
+  </div>
+
+  <div class="card">
     <h2 class="card-title">API keys &amp; tokens</h2>
     <p class="card-desc">
       Stored in <code>.env</code> in the project root — never committed, never sent anywhere
@@ -183,6 +221,18 @@ html, body { min-height: 100vh; background: var(--bg); color: var(--text); font-
       <label for="openai-key-input">OpenAI API key</label>
       <input type="password" id="openai-key-input" placeholder="sk-…" autocomplete="off" />
       <span class="field-hint" id="openai-key-hint"></span>
+    </div>
+
+    <div class="field">
+      <label for="ravendb-license-input">
+        RavenDB license
+        <span class="status-badge" id="ravendb-license-badge">…</span>
+      </label>
+      <input type="password" id="ravendb-license-input" placeholder='{"Id":"…","Name":"…","Keys":[…]}' autocomplete="off" />
+      <span class="field-hint">
+        Paste the full license JSON. Without one, RavenDB runs in free Developer mode
+        (3 GB / 1 node). Get one at <a href="https://ravendb.net/download" target="_blank" rel="noreferrer">ravendb.net/download →</a>.
+      </span>
     </div>
 
     <div class="field">
@@ -294,6 +344,14 @@ function showMsg(el, text, isError) {
   setTimeout(() => el.classList.remove('show'), 2500);
 }
 
+function joinList(list) {
+  return Array.isArray(list) ? list.join(', ') : '';
+}
+
+function parseList(text) {
+  return text.split(',').map(s => s.trim()).filter(Boolean);
+}
+
 async function loadProfile() {
   try {
     const res = await fetch(`/api/profile?user_id=${encodeURIComponent(getUserId())}`);
@@ -305,6 +363,12 @@ async function loadProfile() {
     document.getElementById('carry-on-input').checked = !!p.carry_on_only;
     document.getElementById('budget-input').value = p.budget_max ?? '';
     document.getElementById('currency-input').value = p.budget_currency || '';
+    document.getElementById('departure-airports-input').value = joinList(p.departure_airports);
+    document.getElementById('countries-input').value = joinList(p.countries_of_interest);
+    document.getElementById('destinations-input').value = joinList(p.destinations);
+    document.getElementById('airlines-input').value = joinList(p.preferred_airlines);
+    document.getElementById('loyalty-input').value = joinList(p.loyalty_programs);
+    document.getElementById('max-stops-input').value = p.max_stops ?? '';
   } catch (_) {}
 }
 
@@ -358,6 +422,36 @@ async function saveDetails() {
   }
 }
 
+async function savePreferences() {
+  const btn = document.getElementById('save-preferences-btn');
+  const msg = document.getElementById('preferences-msg');
+  btn.disabled = true;
+  try {
+    const maxStops = document.getElementById('max-stops-input').value;
+    const res = await fetch('/api/profile/details', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: getUserId(),
+        departure_airports: parseList(document.getElementById('departure-airports-input').value),
+        countries_of_interest: parseList(document.getElementById('countries-input').value),
+        destinations: parseList(document.getElementById('destinations-input').value),
+        preferred_airlines: parseList(document.getElementById('airlines-input').value),
+        loyalty_programs: parseList(document.getElementById('loyalty-input').value),
+        max_stops: maxStops ? Number(maxStops) : null,
+      }),
+    });
+    if (!res.ok) throw new Error(`Server error ${res.status}`);
+    showMsg(msg, 'Saved ✓', false);
+  } catch (err) {
+    showMsg(msg, String(err), true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('save-preferences-btn').addEventListener('click', savePreferences);
+
 async function uploadAttachment(type) {
   const fileInput = document.getElementById(`file-${type}`);
   const file = fileInput.files[0];
@@ -393,6 +487,15 @@ async function loadTokenStatus() {
       ? 'A key is already configured — leave blank to keep it, or paste a new one to replace it.'
       : 'Get one at platform.openai.com → API Keys.';
 
+    const licenseBadge = document.getElementById('ravendb-license-badge');
+    if (data.ravendb_license_set) {
+      licenseBadge.textContent = '✅ set';
+      licenseBadge.className = 'status-badge ok';
+    } else {
+      licenseBadge.textContent = '⚪ not set (Developer mode)';
+      licenseBadge.className = 'status-badge';
+    }
+
     const badge = document.getElementById('travelpayouts-badge');
     if (data.travelpayouts_valid === true) {
       badge.textContent = '✅ valid';
@@ -414,15 +517,17 @@ async function saveTokens() {
   const btn = document.getElementById('save-tokens-btn');
   const msg = document.getElementById('tokens-msg');
   const openaiKey = document.getElementById('openai-key-input').value.trim();
+  const license = document.getElementById('ravendb-license-input').value.trim();
   const tpToken = document.getElementById('travelpayouts-token-input').value.trim();
 
-  if (!openaiKey && !tpToken) {
+  if (!openaiKey && !license && !tpToken) {
     showMsg(msg, 'Nothing to save', true);
     return;
   }
 
   const body = {};
   if (openaiKey) body.openai_api_key = openaiKey;
+  if (license) body.ravendb_license = license;
   if (tpToken) body.travelpayouts_token = tpToken;
 
   btn.disabled = true;
@@ -437,6 +542,7 @@ async function saveTokens() {
       throw new Error(data.detail || `Server error ${res.status}`);
     }
     document.getElementById('openai-key-input').value = '';
+    document.getElementById('ravendb-license-input').value = '';
     document.getElementById('travelpayouts-token-input').value = '';
     showMsg(msg, 'Saved ✓', false);
     await loadTokenStatus();
