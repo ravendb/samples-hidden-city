@@ -119,20 +119,26 @@ function Ensure-CliTool($cmd, $wingetId, $displayName) {
     return $false
 }
 
-# Git for Windows ships its own openssl.exe (mingw64\bin), which commonly sits
-# earlier on PATH than FireDaemon's. If Get-Command resolves to that one, the
-# `-legacy` PKCS12 export in Ensure-RavenDbCerts fails with a DSO_load error --
-# its libcrypto doesn't match FireDaemon's legacy.dll module. FireDaemon's
-# installer places openssl.exe and lib\ossl-modules (incl. legacy.dll) together
-# under Program Files, so prefer that path explicitly over PATH resolution to
-# guarantee a matched exe+module pair regardless of install order.
+# FireDaemon's installer places files under a version-suffixed folder name
+# (e.g. "FireDaemon OpenSSL 3", "FireDaemon OpenSSL 4") -- there is no plain
+# "OpenSSL" folder -- and per the winget package's own tracked issue
+# (microsoft/winget-pkgs#130257) it does NOT add that folder to PATH. That
+# makes `Get-Command openssl` unreliable in both directions: it can resolve to
+# Git for Windows' own openssl.exe (mingw64\bin), whose libcrypto doesn't
+# match FireDaemon's legacy.dll and breaks the `-legacy` PKCS12 export in
+# Ensure-RavenDbCerts with a DSO_load error; or, right after installing
+# FireDaemon via winget, it can still resolve to nothing at all. Search
+# FireDaemon's actual install locations directly instead of trusting PATH,
+# preferring the highest version if more than one is present.
 function Resolve-OpenSslExe {
-    $knownPaths = @(
-        "$env:ProgramFiles\OpenSSL\bin\openssl.exe",
-        "${env:ProgramFiles(x86)}\OpenSSL\bin\openssl.exe"
-    )
-    foreach ($p in $knownPaths) {
-        if ($p -and (Test-Path $p)) { return $p }
+    $roots = @($env:ProgramFiles, ${env:ProgramFiles(x86)}) | Where-Object { $_ }
+    foreach ($root in $roots) {
+        $exe = Get-ChildItem -Path $root -Directory -Filter "FireDaemon OpenSSL*" -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending |
+            ForEach-Object { Join-Path $_.FullName "bin\openssl.exe" } |
+            Where-Object { Test-Path $_ } |
+            Select-Object -First 1
+        if ($exe) { return $exe }
     }
     $onPath = Get-Command openssl -ErrorAction SilentlyContinue
     if ($onPath) { return $onPath.Source }
@@ -178,14 +184,24 @@ function Ensure-RavenDbCerts {
         return
     }
 
-    if (-not (Ensure-CliTool "openssl" "FireDaemon.OpenSSL" "OpenSSL")) {
-        Write-Host "  ERROR: openssl is required to generate RavenDB TLS certs." -ForegroundColor Red
-        exit 1
-    }
-
+    # Not routed through Ensure-CliTool: that helper's "already installed?"
+    # check is Get-Command-based, which is unreliable for this package in
+    # both directions -- see Resolve-OpenSslExe above. Resolve directly, only
+    # falling back to a winget install if genuinely not found anywhere.
     $openssl = Resolve-OpenSslExe
     if (-not $openssl) {
-        Write-Host "  ERROR: openssl was reported installed but could not be located." -ForegroundColor Red
+        if (Get-Command winget -ErrorAction SilentlyContinue) {
+            Write-Warn "OpenSSL not found -- installing via winget (FireDaemon.OpenSSL)..."
+            winget install -e --id FireDaemon.OpenSSL --accept-package-agreements --accept-source-agreements
+            $openssl = Resolve-OpenSslExe
+        } else {
+            Write-Host "  ERROR: openssl not found and winget isn't available to install it." -ForegroundColor Red
+            Write-Host "    Install it manually: winget install -e --id FireDaemon.OpenSSL" -ForegroundColor Gray
+        }
+    }
+    if (-not $openssl) {
+        Write-Host "  ERROR: openssl is required to generate RavenDB TLS certs and could not be located" -ForegroundColor Red
+        Write-Host "    (checked Program Files\FireDaemon OpenSSL*\bin and PATH)." -ForegroundColor Gray
         exit 1
     }
 
