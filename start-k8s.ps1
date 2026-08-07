@@ -119,6 +119,26 @@ function Ensure-CliTool($cmd, $wingetId, $displayName) {
     return $false
 }
 
+# Git for Windows ships its own openssl.exe (mingw64\bin), which commonly sits
+# earlier on PATH than FireDaemon's. If Get-Command resolves to that one, the
+# `-legacy` PKCS12 export in Ensure-RavenDbCerts fails with a DSO_load error --
+# its libcrypto doesn't match FireDaemon's legacy.dll module. FireDaemon's
+# installer places openssl.exe and lib\ossl-modules (incl. legacy.dll) together
+# under Program Files, so prefer that path explicitly over PATH resolution to
+# guarantee a matched exe+module pair regardless of install order.
+function Resolve-OpenSslExe {
+    $knownPaths = @(
+        "$env:ProgramFiles\OpenSSL\bin\openssl.exe",
+        "${env:ProgramFiles(x86)}\OpenSSL\bin\openssl.exe"
+    )
+    foreach ($p in $knownPaths) {
+        if ($p -and (Test-Path $p)) { return $p }
+    }
+    $onPath = Get-Command openssl -ErrorAction SilentlyContinue
+    if ($onPath) { return $onPath.Source }
+    return $null
+}
+
 # Reads the active (uncommented) node tags out of k8s/ravendb/values.yaml,
 # e.g. @("a") today, @("a","b","c") if b/c get uncommented later. Used for
 # the cert SAN list, CoreDNS setup, and picking the port-forward node.
@@ -163,6 +183,26 @@ function Ensure-RavenDbCerts {
         exit 1
     }
 
+    $openssl = Resolve-OpenSslExe
+    if (-not $openssl) {
+        Write-Host "  ERROR: openssl was reported installed but could not be located." -ForegroundColor Red
+        exit 1
+    }
+
+    # Fail fast with a clear message if the legacy provider (needed for the
+    # -legacy PKCS12 export below) can't load, instead of surfacing a cryptic
+    # DSO_load stack trace deep inside pkcs12 export. Usually means a second,
+    # mismatched openssl install (e.g. Git for Windows') was shadowing
+    # FireDaemon's on PATH -- see Resolve-OpenSslExe above.
+    $legacyProbe = & $openssl list -providers -legacy 2>&1
+    if ($LASTEXITCODE -ne 0 -or ($legacyProbe -join "`n") -notmatch "legacy") {
+        Write-Host "  ERROR: openssl's 'legacy' provider failed to load (needed for PKCS12 export)." -ForegroundColor Red
+        Write-Host "    Resolved openssl: $openssl" -ForegroundColor Gray
+        Write-Host "    Reinstall it with: winget install -e --id FireDaemon.OpenSSL --force" -ForegroundColor Gray
+        Write-Host "    $legacyProbe" -ForegroundColor Gray
+        exit 1
+    }
+
     New-Item -ItemType Directory -Force -Path $CertsDir | Out-Null
     Write-Host "  Generating self-signed RavenDB TLS chain in k8s/ravendb/certs..." -ForegroundColor Gray
 
@@ -200,32 +240,32 @@ extendedKeyUsage = clientAuth
 "@ | Set-Content "$CertsDir\client-ext.cnf" -Encoding utf8
 
     # CA
-    openssl genrsa -out "$CertsDir\ca.key" 4096 2>$null
-    openssl req -x509 -new -nodes -key "$CertsDir\ca.key" -sha256 -days 3650 `
+    & $openssl genrsa -out "$CertsDir\ca.key" 4096 2>$null
+    & $openssl req -x509 -new -nodes -key "$CertsDir\ca.key" -sha256 -days 3650 `
         -out "$CertsDir\ca.crt" -subj "/CN=RavenDB Demo CA" `
         -extensions ext -config "$CertsDir\ca-ext.cnf"
 
     # Server (CN = first node tag, full node list carried in the SAN instead)
-    openssl genrsa -out "$CertsDir\server.key" 2048 2>$null
-    openssl req -new -key "$CertsDir\server.key" -out "$CertsDir\server.csr" `
+    & $openssl genrsa -out "$CertsDir\server.key" 2048 2>$null
+    & $openssl req -new -key "$CertsDir\server.key" -out "$CertsDir\server.csr" `
         -subj "/CN=$($NodeTags[0]).hiddencity.local" -config "$CertsDir\server-san.cnf"
-    openssl x509 -req -in "$CertsDir\server.csr" -CA "$CertsDir\ca.crt" -CAkey "$CertsDir\ca.key" `
+    & $openssl x509 -req -in "$CertsDir\server.csr" -CA "$CertsDir\ca.crt" -CAkey "$CertsDir\ca.key" `
         -CAcreateserial -out "$CertsDir\server.crt" -days 825 -sha256 `
         -extfile "$CertsDir\server-san.cnf" -extensions ext
 
     # Client
-    openssl genrsa -out "$CertsDir\client.key" 2048 2>$null
-    openssl req -new -key "$CertsDir\client.key" -out "$CertsDir\client.csr" `
+    & $openssl genrsa -out "$CertsDir\client.key" 2048 2>$null
+    & $openssl req -new -key "$CertsDir\client.key" -out "$CertsDir\client.csr" `
         -subj "/CN=hidden-city-client" -config "$CertsDir\client-ext.cnf"
-    openssl x509 -req -in "$CertsDir\client.csr" -CA "$CertsDir\ca.crt" -CAkey "$CertsDir\ca.key" `
+    & $openssl x509 -req -in "$CertsDir\client.csr" -CA "$CertsDir\ca.crt" -CAkey "$CertsDir\ca.key" `
         -CAcreateserial -out "$CertsDir\client.crt" -days 825 -sha256 `
         -extfile "$CertsDir\client-ext.cnf" -extensions ext
 
     # Legacy-encoding PKCS12 -- required by the operator, see function comment above
-    openssl pkcs12 -export -legacy -out "$CertsDir\server.pfx" `
+    & $openssl pkcs12 -export -legacy -out "$CertsDir\server.pfx" `
         -inkey "$CertsDir\server.key" -in "$CertsDir\server.crt" `
         -certfile "$CertsDir\ca.crt" -passout pass:
-    openssl pkcs12 -export -legacy -out "$CertsDir\client.pfx" `
+    & $openssl pkcs12 -export -legacy -out "$CertsDir\client.pfx" `
         -inkey "$CertsDir\client.key" -in "$CertsDir\client.crt" `
         -certfile "$CertsDir\ca.crt" -passout pass:
 
