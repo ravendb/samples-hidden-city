@@ -1,5 +1,13 @@
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: hidden-city
+# kindnet (the default CNI) doesn't reliably hairpin a pod's traffic back to
+# itself through its own Service ClusterIP -- RavenDB's self-signed cert setup
+# needs exactly that (AssertServerCanContactItselfWhenAuthIsOn on startup).
+# Calico is installed instead (see k8s/operator/install.sh) since it handles
+# hairpin/loopback traffic correctly.
+networking:
+  disableDefaultCNI: true
+  podSubnet: 192.168.0.0/16
 nodes:
 - role: control-plane

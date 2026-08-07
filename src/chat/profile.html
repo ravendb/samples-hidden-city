@@ -87,6 +87,20 @@ html, body { min-height: 100vh; background: var(--bg); color: var(--text); font-
 .save-msg.error { color: var(--error); }
 .save-row { display: flex; align-items: center; }
 
+.field input[type="password"] {
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 9px 11px;
+  color: var(--text); font-size: 0.88rem; font-family: var(--font);
+}
+.field input[type="password"]:focus { outline: none; border-color: var(--primary); }
+.field-hint { font-size: 0.76rem; color: var(--text-muted); line-height: 1.5; }
+.status-badge {
+  font-size: 0.72rem; font-weight: 600; padding: 1px 8px; border-radius: 999px;
+  background: var(--surface2); color: var(--text-muted); border: 1px solid var(--border);
+}
+.status-badge.ok { color: var(--success); border-color: rgba(34,197,94,0.35); }
+.status-badge.error { color: var(--error); border-color: rgba(239,68,68,0.35); }
+
 .attachment-row {
   display: flex; align-items: center; justify-content: space-between; gap: 1rem;
   padding: 0.9rem 0; border-top: 1px solid var(--border); flex-wrap: wrap;
@@ -155,6 +169,87 @@ html, body { min-height: 100vh; background: var(--bg); color: var(--text); font-
     <div class="save-row">
       <button class="btn btn-primary" id="save-details-btn">Save</button>
       <span class="save-msg" id="details-msg"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 class="card-title">Travel preferences</h2>
+    <p class="card-desc">
+      Comma-separated. These feed <code>search_routes</code> filtering and the hidden-city
+      scan the same way telling the agent in chat would.
+    </p>
+    <div class="field">
+      <label for="departure-airports-input">Departure airports</label>
+      <input type="text" id="departure-airports-input" placeholder="e.g. WAW, KRK" autocomplete="off" />
+    </div>
+    <div class="field">
+      <label for="countries-input">Countries of interest</label>
+      <input type="text" id="countries-input" placeholder="e.g. China, Japan" autocomplete="off" />
+    </div>
+    <div class="field">
+      <label for="destinations-input">Destinations</label>
+      <input type="text" id="destinations-input" placeholder="e.g. Beijing, Tokyo" autocomplete="off" />
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="airlines-input">Preferred airlines</label>
+        <input type="text" id="airlines-input" placeholder="e.g. LOT, Lufthansa" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label for="max-stops-input">Max stops</label>
+        <input type="number" id="max-stops-input" placeholder="e.g. 1" min="0" />
+      </div>
+    </div>
+    <div class="field">
+      <label for="loyalty-input">Loyalty programs</label>
+      <input type="text" id="loyalty-input" placeholder="e.g. Miles & More" autocomplete="off" />
+    </div>
+    <div class="save-row">
+      <button class="btn btn-primary" id="save-preferences-btn">Save preferences</button>
+      <span class="save-msg" id="preferences-msg"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 class="card-title">API keys &amp; tokens</h2>
+    <p class="card-desc">
+      Stored in <code>.env</code> in the project root — never committed, never sent anywhere
+      except the named API itself.
+    </p>
+
+    <div class="field">
+      <label for="openai-key-input">OpenAI API key</label>
+      <input type="password" id="openai-key-input" placeholder="sk-…" autocomplete="off" />
+      <span class="field-hint" id="openai-key-hint"></span>
+    </div>
+
+    <div class="field">
+      <label for="ravendb-license-input">
+        RavenDB license
+        <span class="status-badge" id="ravendb-license-badge">…</span>
+      </label>
+      <input type="password" id="ravendb-license-input" placeholder='{"Id":"…","Name":"…","Keys":[…]}' autocomplete="off" />
+      <span class="field-hint">
+        Paste the full license JSON. Without one, RavenDB runs in free Developer mode
+        (3 GB / 1 node). Get one at <a href="https://ravendb.net/download" target="_blank" rel="noreferrer">ravendb.net/download →</a>.
+      </span>
+    </div>
+
+    <div class="field">
+      <label for="travelpayouts-token-input">
+        Travelpayouts token
+        <span class="status-badge" id="travelpayouts-badge">…</span>
+      </label>
+      <input type="password" id="travelpayouts-token-input" placeholder="API token…" autocomplete="off" />
+      <span class="field-hint">
+        Used for live price lookups on a cache miss and the 6-hour bulk ingest.
+        Get one at <a href="https://www.travelpayouts.com/programs/100/tools/api" target="_blank" rel="noreferrer">travelpayouts.com → API access</a>.
+      </span>
+    </div>
+
+    <div class="save-row">
+      <button class="btn btn-primary" id="save-tokens-btn">Save tokens</button>
+      <span class="save-msg" id="tokens-msg"></span>
     </div>
   </div>
 
@@ -249,6 +344,14 @@ function showMsg(el, text, isError) {
   setTimeout(() => el.classList.remove('show'), 2500);
 }
 
+function joinList(list) {
+  return Array.isArray(list) ? list.join(', ') : '';
+}
+
+function parseList(text) {
+  return text.split(',').map(s => s.trim()).filter(Boolean);
+}
+
 async function loadProfile() {
   try {
     const res = await fetch(`/api/profile?user_id=${encodeURIComponent(getUserId())}`);
@@ -260,6 +363,12 @@ async function loadProfile() {
     document.getElementById('carry-on-input').checked = !!p.carry_on_only;
     document.getElementById('budget-input').value = p.budget_max ?? '';
     document.getElementById('currency-input').value = p.budget_currency || '';
+    document.getElementById('departure-airports-input').value = joinList(p.departure_airports);
+    document.getElementById('countries-input').value = joinList(p.countries_of_interest);
+    document.getElementById('destinations-input').value = joinList(p.destinations);
+    document.getElementById('airlines-input').value = joinList(p.preferred_airlines);
+    document.getElementById('loyalty-input').value = joinList(p.loyalty_programs);
+    document.getElementById('max-stops-input').value = p.max_stops ?? '';
   } catch (_) {}
 }
 
@@ -313,6 +422,36 @@ async function saveDetails() {
   }
 }
 
+async function savePreferences() {
+  const btn = document.getElementById('save-preferences-btn');
+  const msg = document.getElementById('preferences-msg');
+  btn.disabled = true;
+  try {
+    const maxStops = document.getElementById('max-stops-input').value;
+    const res = await fetch('/api/profile/details', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: getUserId(),
+        departure_airports: parseList(document.getElementById('departure-airports-input').value),
+        countries_of_interest: parseList(document.getElementById('countries-input').value),
+        destinations: parseList(document.getElementById('destinations-input').value),
+        preferred_airlines: parseList(document.getElementById('airlines-input').value),
+        loyalty_programs: parseList(document.getElementById('loyalty-input').value),
+        max_stops: maxStops ? Number(maxStops) : null,
+      }),
+    });
+    if (!res.ok) throw new Error(`Server error ${res.status}`);
+    showMsg(msg, 'Saved ✓', false);
+  } catch (err) {
+    showMsg(msg, String(err), true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('save-preferences-btn').addEventListener('click', savePreferences);
+
 async function uploadAttachment(type) {
   const fileInput = document.getElementById(`file-${type}`);
   const file = fileInput.files[0];
@@ -338,9 +477,88 @@ document.querySelectorAll('.attachment-actions .btn-ghost').forEach(btn => {
   btn.addEventListener('click', () => uploadAttachment(btn.dataset.type));
 });
 
+async function loadTokenStatus() {
+  try {
+    const res = await fetch('/api/setup/status');
+    if (!res.ok) return;
+    const data = await res.json();
+
+    document.getElementById('openai-key-hint').textContent = data.openai_api_key_set
+      ? 'A key is already configured — leave blank to keep it, or paste a new one to replace it.'
+      : 'Get one at platform.openai.com → API Keys.';
+
+    const licenseBadge = document.getElementById('ravendb-license-badge');
+    if (data.ravendb_license_set) {
+      licenseBadge.textContent = '✅ set';
+      licenseBadge.className = 'status-badge ok';
+    } else {
+      licenseBadge.textContent = '⚪ not set (Developer mode)';
+      licenseBadge.className = 'status-badge';
+    }
+
+    const badge = document.getElementById('travelpayouts-badge');
+    if (data.travelpayouts_valid === true) {
+      badge.textContent = '✅ valid';
+      badge.className = 'status-badge ok';
+    } else if (data.travelpayouts_valid === false) {
+      badge.textContent = '❌ rejected (401)';
+      badge.className = 'status-badge error';
+    } else if (data.travelpayouts_set) {
+      badge.textContent = '⚪ set, unchecked';
+      badge.className = 'status-badge';
+    } else {
+      badge.textContent = '⚪ not set';
+      badge.className = 'status-badge';
+    }
+  } catch (_) {}
+}
+
+async function saveTokens() {
+  const btn = document.getElementById('save-tokens-btn');
+  const msg = document.getElementById('tokens-msg');
+  const openaiKey = document.getElementById('openai-key-input').value.trim();
+  const license = document.getElementById('ravendb-license-input').value.trim();
+  const tpToken = document.getElementById('travelpayouts-token-input').value.trim();
+
+  if (!openaiKey && !license && !tpToken) {
+    showMsg(msg, 'Nothing to save', true);
+    return;
+  }
+
+  const body = {};
+  if (openaiKey) body.openai_api_key = openaiKey;
+  if (license) body.ravendb_license = license;
+  if (tpToken) body.travelpayouts_token = tpToken;
+
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/setup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || `Server error ${res.status}`);
+    }
+    document.getElementById('openai-key-input').value = '';
+    document.getElementById('ravendb-license-input').value = '';
+    document.getElementById('travelpayouts-token-input').value = '';
+    showMsg(msg, 'Saved ✓', false);
+    await loadTokenStatus();
+  } catch (err) {
+    showMsg(msg, String(err.message || err), true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('save-tokens-btn').addEventListener('click', saveTokens);
+
 initUserSwitcher();
 loadProfile();
 loadAttachments();
+loadTokenStatus();
 </script>
 </body>
 </html>

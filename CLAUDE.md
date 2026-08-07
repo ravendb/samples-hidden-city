@@ -78,7 +78,7 @@ and when. Nothing is blindly injected. Only the user's prompt leaves the cluster
 │   ├── scraper/              # Travelpayouts bulk ingest (CronJob)
 │   ├── worker/               # RavenDB subscription listener + alert push
 │   ├── agent/                # FastAPI app + LLM agent loop
-│   ├── tools/                # Tool implementations (search_routes, get_live_price, …)
+│   ├── tools/                # Tool implementations (search_routes, get_live_prices, …)
 │   ├── hidden_city/          # Hidden city scoring logic
 │   └── chat/                 # Chat UI
 └── tests/
@@ -173,9 +173,17 @@ on the separate `users/...` document.
 
 ### Vectors
 
-Route embeddings for semantic similarity search ("something like LHR but cheaper",
-"fastest Europe→Asia hub"). Stored as vector fields on route documents — no
-separate vector DB needed.
+Airport documents carry a `location_vector` (a 3D unit-vector projection of
+lat/lng — see `src/db/geo.py`), used by `search_routes`'s vector-search
+fallback to find geographically nearby airports when no direct route exists,
+without a hand-curated "nearby airports" list. Requires RavenDB 7.0+ (native
+vector search did not exist before) — see `src/db/client.py` and the modern
+`ravendb` Python client. Stored as a field on the same document — no separate
+vector DB needed.
+
+Route-level semantic similarity search ("something like LHR but cheaper",
+"fastest Europe→Asia hub") is a distinct, not-yet-built idea — would need
+route embeddings stored as vector fields on route documents. Not implemented.
 
 ### Attachments
 
@@ -190,18 +198,38 @@ uploaded/retrieved whole via the Profile screen (`/profile`) and its
 IMPORTANT: Do NOT use sidecar injection to blindly push context into every prompt.
 The model must call RavenDB explicitly as a tool — it decides what to fetch.
 
+One narrow, documented exception: `_try_fast_path()` in `src/agent/loop.py`
+pre-resolves an unambiguous "from X to Y" message via
+`src/tools/resolve_airports.py` (RavenDB full-text search over `Airports`,
+using an auto-created index — see README's "RavenDB Features Used") and
+pre-fetches `search_routes` itself, cutting the turn from two OpenAI calls to
+one (~2100 tokens → ~750 measured). This is *not* a blanket sidecar — it only
+fires when both airports resolve to exactly one match each; anything
+ambiguous or unmatched returns `None` and falls back to the model calling
+`search_routes` itself, unchanged. Do not widen this pattern to other tools
+without the same strict "exact match or fall back" discipline.
+
 ### Tool Definitions (`src/tools/`)
 
 | Tool                 | Description                                                              |
 |----------------------|--------------------------------------------------------------------------|
-| `search_routes`      | Vector + doc query against RavenDB: origin, dest, date, stops, price, semantic similarity |
-| `get_live_price`     | Live call to Travelpayouts on cache miss — fetches fresh price and writes back to RavenDB |
+| `search_routes`      | Doc query against RavenDB: origin, dest, date, stops, price, hidden city hubs. If no direct route exists: tries a connecting-hub search (origin→X→destination via cached routes) first, then falls back to vector search over airport `location_vector` for geographically nearby airports |
+| `get_live_prices`    | Live call to Travelpayouts on cache miss — single route, or several cheapest destinations from an origin when destination is omitted ("anywhere from home") — writes back to RavenDB |
 | `get_user_profile`   | Read user profile and preferences from RavenDB attachments               |
-| `save_conversation`  | Persist the current turn to RavenDB after each exchange                  |
+| `update_constraints` | Save a trip-specific constraint (carry-on only for this trip, max stops) — called only when the user states one |
 
-Hidden city scoring and semantic similarity are not separate tools — they are
-logic inside `search_routes` (vector query handles similarity; hidden city score
-is a field on the route document, filtered at query time).
+Turn persistence itself (`persist_turn` in `src/tools/save_conversation.py`) is
+NOT an LLM tool — it is called directly by `src/agent/app.py` after the model's
+final response, using the response text the server already has. Routing it
+through a tool call would force the model to restate its full answer as a tool
+argument before saying it again as the reply, doubling output tokens and
+adding a full extra round trip for zero benefit.
+
+Hidden city scoring and nearby-airport vector search are not separate tools —
+they are logic inside `search_routes` (hidden city score is a field on the
+route document, filtered at query time; nearby-airport lookup is a
+vector_search query against airport `location_vector`, used only as a
+fallback when no direct or connecting route is found).
 
 ### What Goes Outbound
 
@@ -223,23 +251,41 @@ See @docs/hidden-city.md for full spec. Summary:
 
 ## Kubernetes Operator
 
-The `RavenDBCluster` CRD is the contract. The Operator is the enforcer.
+The `RavenDBCluster` CRD (from https://github.com/ravendb/ravendb-operator) is
+the contract. The Operator is the enforcer. Installed via Helm — see
+`k8s/operator/install.sh` — not applied as a raw manifest.
 
 ```yaml
-apiVersion: ravendb.com/v1alpha1
+apiVersion: ravendb.ravendb.io/v1
 kind: RavenDBCluster
 metadata:
   name: ravendb-cluster
 spec:
-  nodes: 3
-  storage: 50Gi
-  tlsMode: ClusterExternalAccess
+  nodes:
+    - tag: a
+      publicServerUrl: https://a.hiddencity.local:443
+      publicServerUrlTcp: tcp://a-tcp.hiddencity.local:443
+    - tag: b
+      publicServerUrl: https://b.hiddencity.local:443
+      publicServerUrlTcp: tcp://b-tcp.hiddencity.local:443
+    - tag: c
+      publicServerUrl: https://c.hiddencity.local:443
+      publicServerUrlTcp: tcp://c-tcp.hiddencity.local:443
+  mode: None  # self-signed via *CertSecretRef fields; use LetsEncrypt for a public demo
+  storage:
+    data:
+      size: 50Gi
 ```
 
-The Operator handles: bootstrapping, certificate wiring, rolling node upgrades
-with Raft quorum gates (never loses quorum during upgrade), and continuous
-reconciliation against declared state. Admission webhooks block invalid configs
-before any damage is done.
+See `k8s/ravendb/values.yaml` for the full chart values (cert/license secret
+refs, ingress config) actually used to deploy this cluster.
+
+The Operator handles: bootstrapping (via a one-shot cluster-bootstrapper Job),
+certificate wiring, rolling node upgrades with safety gates (node-by-node,
+halts on failed gates, resumes automatically once fixed, blocks downgrades),
+and continuous reconciliation against declared state. Admission webhooks block
+invalid configs before any damage is done. Note: initial node topology is fixed
+at bootstrap — adding/removing nodes later is a manual operation, not automatic.
 
 Contact Omer for operator internals — he wrote it.
 
@@ -273,7 +319,8 @@ Conversation state is a RavenDB document (`sessions/...`), not pod RAM, not Redi
 
 - Persists across pod restarts — demo beat: kill the agent pod mid-conversation, query resumes
 - `active_constraints` (carry-on only, max stops, etc.) are indexed fields, not buried in turn text
-- `save_conversation` tool appends each turn after the model responds
+- `persist_turn` appends each turn after the model responds — called directly by the FastAPI
+  handler, not through an LLM tool call (see "RavenDB as Agent Tool" above)
 - At the start of each turn the agent reads last N turns + `active_constraints` only — never the full raw history
 - Binary user data (passport scan, bag photo) lives as attachments on `users/...` document, fetched whole by `get_user_profile`
 
@@ -292,7 +339,7 @@ Conversation state is a RavenDB document (`sessions/...`), not pod RAM, not Redi
 - Unit: hidden city detection scoring logic
 - Unit: conversation memory truncation (only last N turns passed to model)
 - Integration: RavenDB tool `search_routes` returns correct results for known fixtures
-- Integration: `find_similar_routes` vector search returns semantically relevant routes
+- Integration: vector-search nearby-airport lookup in `search_routes` returns geographically relevant airports
 - Integration: session document survives simulated pod restart
 - Always run `pytest tests/unit/` before committing
 

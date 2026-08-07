@@ -23,9 +23,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from pyravendb.commands.commands_data import PutDocumentCommand
-
-from src.db.client import doc_to_dict, get_store
+from src.db.client import doc_to_dict, get_store, put_document
 
 log = logging.getLogger(__name__)
 
@@ -53,7 +51,15 @@ async def update_user_profile(
     loyalty_programs: Optional[list] = None,
     budget_max: Optional[float] = None,
     budget_currency: Optional[str] = None,
+    merge_lists: bool = True,
 ) -> dict:
+    """merge_lists=True (default, used by the update_user_profile LLM tool call) appends
+    to whatever list is already saved, since the model only ever learns one new value at
+    a time and must never silently drop earlier ones. merge_lists=False (used by the
+    Profile screen's form, see app.py's /api/profile/details) replaces each list field
+    outright, since a form shows the user the full current value and "Save" should mean
+    "set it to exactly this," including removing entries the user deleted from the field.
+    """
     store = get_store()
 
     with store.open_session() as session:
@@ -70,22 +76,35 @@ async def update_user_profile(
     if home_airport is not None:
         updates["home_airport"] = home_airport.upper()
     if departure_airports is not None:
-        updates["departure_airports"] = _merge_list(
-            doc.get("departure_airports", []), [a.upper() for a in departure_airports]
+        new_airports = [a.upper() for a in departure_airports]
+        updates["departure_airports"] = (
+            _merge_list(doc.get("departure_airports", []), new_airports)
+            if merge_lists
+            else new_airports
         )
     if countries_of_interest is not None:
-        updates["countries_of_interest"] = _merge_list(
-            doc.get("countries_of_interest", []), countries_of_interest
+        updates["countries_of_interest"] = (
+            _merge_list(doc.get("countries_of_interest", []), countries_of_interest)
+            if merge_lists
+            else countries_of_interest
         )
     if destinations is not None:
-        updates["destinations"] = _merge_list(doc.get("destinations", []), destinations)
+        updates["destinations"] = (
+            _merge_list(doc.get("destinations", []), destinations)
+            if merge_lists
+            else destinations
+        )
     if preferred_airlines is not None:
-        updates["preferred_airlines"] = _merge_list(
-            doc.get("preferred_airlines", []), preferred_airlines
+        updates["preferred_airlines"] = (
+            _merge_list(doc.get("preferred_airlines", []), preferred_airlines)
+            if merge_lists
+            else preferred_airlines
         )
     if loyalty_programs is not None:
-        updates["loyalty_programs"] = _merge_list(
-            doc.get("loyalty_programs", []), loyalty_programs
+        updates["loyalty_programs"] = (
+            _merge_list(doc.get("loyalty_programs", []), loyalty_programs)
+            if merge_lists
+            else loyalty_programs
         )
     if budget_max is not None:
         updates["budget_max"] = budget_max
@@ -100,9 +119,7 @@ async def update_user_profile(
     doc.pop("@metadata", None)
     doc["@metadata"] = {"@collection": "Users"}
 
-    store.get_request_executor().execute(
-        PutDocumentCommand(key=f"users/{user_id}", document=doc)
-    )
+    put_document(store, f"users/{user_id}", doc)
 
     log.info("Updated profile for %s: %s", user_id, list(updates.keys()))
     return {"saved": True, "user_id": user_id, "updated_fields": list(updates.keys())}

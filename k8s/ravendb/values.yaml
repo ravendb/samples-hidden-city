@@ -1,0 +1,58 @@
+# Helm values for the ravendb-operator/ravendb-cluster chart
+# (https://github.com/ravendb/ravendb-operator).
+#
+# Deploy with:
+#   helm upgrade --install ravendb-cluster ravendb-operator/ravendb-cluster \
+#     -n hidden-city --create-namespace -f k8s/ravendb/values.yaml
+#
+# Pulled and read the chart's actual values.yaml + templates/ravendbcluster.yaml
+# straight from the repo (helm pull ravendb-operator/ravendb-cluster --untar) to
+# get this right — everything below maps 1:1 to what the template consumes.
+#
+# `secrets:` is intentionally omitted: the chart's defaults already are
+# ravendb-license / ravendb-client-cert / ravendb-cert / ravendb-ca-cert, which
+# is exactly what we pre-created by hand (see k8s/operator/install.sh step 1)
+# since chart-provisioning via --set-file isn't wired into this values file.
+#
+# mode: None means self-signed certs supplied via those pre-created Secrets —
+# suitable for a local/kind demo with no public DNS. For a cloud demo, switch to
+# mode: LetsEncrypt (needs spec.email, and per-node cert Secrets instead of the
+# cluster/CA cert pair) — see examples/tls/letsencrypt in the operator repo.
+#
+# TEMPORARY: down to 1 node. The current license.json returns
+# "LicenseLimitException: Your current license (None) does not allow adding
+# nodes to the cluster" (HTTP 402) when the bootstrap job tries to add node B.
+# Get a license that permits multi-node clusters (e.g. the free dev license at
+# https://ravendb.net/license/request/dev) and restore b/c below to go back to 3.
+spec:
+  # Pinned, concrete tag -- the operator's admission webhook rejects floating
+  # tags like ":7.2-latest" ("use a concrete, pinned tag"). Check for newer
+  # releases at https://hub.docker.com/r/ravendb/ravendb/tags.
+  image: ravendb/ravendb:7.2.4-ubuntu.24.04-x64
+  imagePullPolicy: IfNotPresent
+  mode: None
+  domain: hiddencity.local
+
+  nodes:
+    - tag: a
+      publicServerUrl: https://a.hiddencity.local:443
+      publicServerUrlTcp: tcp://a-tcp.hiddencity.local:443
+    # - tag: b
+    #   publicServerUrl: https://b.hiddencity.local:443
+    #   publicServerUrlTcp: tcp://b-tcp.hiddencity.local:443
+    # - tag: c
+    #   publicServerUrl: https://c.hiddencity.local:443
+    #   publicServerUrlTcp: tcp://c-tcp.hiddencity.local:443
+
+  # nginx ingress must already be installed in the cluster (start-k8s.ps1 installs
+  # it); for kind, add a/a-tcp/b/b-tcp/c/c-tcp.hiddencity.local entries to
+  # /etc/hosts pointing at the ingress controller's address.
+  externalAccessConfiguration:
+    type: ingress-controller
+    ingressControllerContext:
+      ingressClassName: nginx
+
+  storage:
+    data:
+      size: 50Gi
+      storageClassName: standard  # kind's default StorageClass (rancher.io/local-path)

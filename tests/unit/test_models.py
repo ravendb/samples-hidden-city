@@ -7,7 +7,6 @@ from src.db.models import (
     AirportDocument,
     Coordinates,
     ConversationTurn,
-    NearbyAirport,
     RouteDocument,
     SessionDocument,
     TypicalPrice,
@@ -59,7 +58,7 @@ class TestAirportDocument:
         )
         assert airport.airport_id() == "airports/WAW"
 
-    def test_nearby_defaults_empty(self):
+    def test_location_vector_defaults_empty(self):
         airport = AirportDocument(
             iata="DOH",
             name="Hamad International",
@@ -67,7 +66,7 @@ class TestAirportDocument:
             country="QA",
             coordinates=Coordinates(lat=25.27, lng=51.61),
         )
-        assert airport.nearby == []
+        assert airport.location_vector == []
 
 
 class TestSessionDocument:

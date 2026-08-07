@@ -11,8 +11,11 @@ import logging
 import os
 
 from dotenv import load_dotenv
-from pyravendb.subscriptions.document_subscriptions import SubscriptionCreationOptions
-from pyravendb.subscriptions.data import SubscriptionWorkerOptions
+from ravendb.documents.subscriptions.options import (
+    SubscriptionCreationOptions,
+    SubscriptionWorkerOptions,
+)
+from ravendb.exceptions.raven_exceptions import RavenException
 
 load_dotenv()
 
@@ -30,12 +33,9 @@ def _create_subscription_if_missing(store) -> str:
         name=SUBSCRIPTION_NAME,
     )
     try:
-        return store.subscriptions.create(options)
-    except Exception as e:
-        # pyravendb wraps the server error in a secondary AttributeError;
-        # check both the exception and its cause for the "already in use" signal
-        full_msg = (str(e) + str(getattr(e, "__context__", "") or "")).lower()
-        if any(p in full_msg for p in ("already exists", "already in use", "subscription with the specified name")):
+        return store.subscriptions.create_for_options(options)
+    except RavenException as e:
+        if "already in use" in str(e).lower():
             log.info("Subscription %r already exists, reusing", SUBSCRIPTION_NAME)
             return SUBSCRIPTION_NAME
         raise
@@ -72,8 +72,8 @@ def run() -> None:
         SubscriptionWorkerOptions(subscription_name)
     )
     try:
-        thread = worker.run(_handle_batch)
-        thread.join()
+        future = worker.run(_handle_batch)
+        future.result()
     except KeyboardInterrupt:
         log.info("Worker stopped")
     finally:

@@ -1,489 +1,78 @@
 # Hidden City Flight Search — RavenDB as Agent Working Memory
 
-> **Conference PoC** — shows how RavenDB eliminates 95 %+ of LLM token spend and
-> cloud egress cost in an AI flight-search agent. Use this repo as a sales demo
-> and conversation-starter with customers running LLM workloads.
-
----
-
-## The Problem
-
-Airlines price connecting routes cheaper than direct legs — flying Warsaw → London
-via New York (exit at London) can cost 62 % less than booking London directly.
-Surfacing these *hidden city* opportunities requires querying three flight APIs,
-cross-referencing prices, and explaining the risks — every single turn of the
-conversation.
-
-### What happens without a local memory layer
-
-| Step | What the agent does | Cost |
-|------|---------------------|------|
-| User asks about flights | Agent calls Travelpayouts API directly | 250 KB response, €0.04 egress |
-| Agent summarises results for the LLM | Full JSON sent in the prompt | ~40 000 tokens ≈ $0.006 per turn |
-| User asks a follow-up | Same API call again | Another 250 KB, another $0.006 |
-| Price watch (polling) | CronJob hits API every 5 min | 288 API calls/day per route |
-
-At 1 000 daily active users this is **~$6/day in LLM tokens alone** before any
-infrastructure costs — and it scales linearly with usage.
-
----
-
-## The Solution: RavenDB as In-Cluster Working Memory
-
-RavenDB runs *inside* the Kubernetes cluster, a few milliseconds from the agent.
-Every result that comes back from an external flight API is written once and read
-many times from the local store. The LLM never sees a raw API response — it sees
-a pre-structured 800-token tool result.
-
-```
-User → Agent (FastAPI) ──tool call──▶ search_routes ──▶ RavenDB (in-cluster)
-                                                              │ cache hit → return
-                                                              │ cache miss
-                                                              ▼
-                                                    Travelpayouts API (live)
-                                                    (write-back to RavenDB)
-
-Price drops → RavenDB Subscription ──push──▶ Worker → alert
-```
-
-### Key savings
-
-| Metric | Naive baseline | With RavenDB | Saving |
-|--------|---------------|--------------|--------|
-| Tokens per agent turn (cache hit) | 40 000–100 000 | ~1 500 | **96 %** |
-| LLM cost per 1 000 turns (gpt-4o-mini) | ~$6.24 | ~$0.47 | **$5.77/day** |
-| Egress per turn (cache hit) | 250 KB | 0.1 KB | **99.96 %** |
-| Egress cost per 1 000 turns\* | ~$40 | ~$0.02 | **$39.98** |
-| External API calls (price watch) | 288/day/route | 0 (push) | **100 %** |
-
-\*AWS us-east-1 egress pricing, $0.09/GB.
-
-**How these numbers are calculated:**
-- Token baseline: raw Travelpayouts bulk response for a typical route query is
-  ~40 000 tokens (JSON verbosity) when stuffed unfiltered into a prompt. We measured
-  with `tiktoken` on actual API responses; see `scripts/measure_tokens.py`.
-- Token budget with RavenDB: system prompt 200 + user message 100 + tool result
-  800 + assistant response 400 = 1 500 tokens. Capped in `src/agent/loop.py`.
-- Egress: `curl -o /dev/null -w "%{size_download}"` on Travelpayouts vs a RavenDB
-  document fetch. See `scripts/measure_egress.py`.
-- Price watch: polling every 5 min = 288 calls/day. RavenDB Data Subscriptions
-  push on change — zero polling.
-
----
-
-## RavenDB Features Used
-
-| Feature | Where | Why it matters |
-|---------|-------|----------------|
-| **Document store** | `src/db/models.py`, all tools | Schema-flexible JSON — route & session docs coexist, no migrations |
-| **Bulk insert** | `src/scraper/run.py` | Ingest 10 000+ Travelpayouts routes in one network round-trip |
-| **Optimistic concurrency** | `src/tools/save_conversation.py` | Multiple agent replicas can update the same session doc safely |
-| **Data Subscriptions** | `src/worker/run.py` | Push-only price-drop alerts — no polling, no message broker needed |
-| **Kubernetes Operator** | `k8s/operator/` | 3-node cluster declared as a CRD; scaling, failover, TLS handled automatically |
-| **Document Expiration** | `src/db/expiration.py` | Price fields auto-expire after 20 min via `@expires` metadata — no manual TTL management |
-| **Attachments** | `src/tools/user_attachments.py`, `/profile` UI | Passport scan, bag photo, preference sheet (PDF) stored as binary blobs on the user doc — not indexed, retrieved whole, never inflating a query |
-
-**How Document Expiration works here:**
-- `ensure_expiration_enabled()` turns the feature on for the database once, at
-  startup (agent boot and scraper CronJob both call it — it's idempotent, so
-  whichever process starts first wins).
-- Every route document written by the bulk scraper (`src/scraper/run.py`) and
-  by the live-price cache-miss path (`src/tools/get_live_price.py`) gets an
-  `@expires` timestamp 20 minutes in the future, computed by `expires_at()`.
-- RavenDB's background expiration process sweeps for expired documents every
-  60 seconds and deletes them server-side — no CronJob, no `DELETE WHERE`
-  query, no housekeeping code in this repo.
-- Net effect: stale prices disappear on their own. A cache read past its TTL
-  is a miss, not stale data — the agent falls through to `get_live_price` and
-  the document is rewritten with a fresh 20-minute clock.
-
-**What gets a TTL and what doesn't:**
-
-| Writer | Data | `@expires`? | Why |
-|--------|------|-------------|-----|
-| `src/scraper/run.py` (CronJob, bulk) | Scraped Travelpayouts prices | Yes, 20 min | Genuinely volatile — a fresh price is one `get_live_price` call away |
-| `src/tools/get_live_price.py` (cache miss) | Live Travelpayouts price | Yes, 20 min | Same reasoning — this *is* the live refresh path |
-| `src/db/seed.py` → `seed_routes()` | Hand-curated fixture routes with real `hubs` / `hidden_city_score` | **No** | These demonstrate the hidden-city scoring logic and have no live source to regenerate from — deleting them on a timer would silently break the demo until the next app restart reseeds them |
-| `src/db/seed.py` → `seed_airports()` | Airport reference data (IATA → city/country) | **No** | Static reference data, not a price |
-
-Watch it happen: open RavenDB Studio's `Routes` collection, trigger a live price
-lookup for a route (e.g. ask the agent about a destination not in the fixtures),
-and that document disappears on its own ~20 minutes later — a good demo beat
-for "the database enforces its own freshness, nobody wrote a cleanup job."
-
-**How Attachments work here:**
-- The Profile screen (`/profile`) lets a user upload a passport scan, a bag
-  photo, and a preference sheet — e.g. an exported bucket-list PDF — on top of
-  their structured preferences (name, home airport, budget, carry-on).
-- Each file is stored via RavenDB's attachment API
-  (`PutAttachmentOperation` / `GetAttachmentOperation` in
-  `src/tools/user_attachments.py`), bound to the `users/{user_id}` document as
-  a separate binary stream — not JSON, not indexed, never returned by a
-  document query.
-- Upload/download is a plain REST path (`POST /api/profile/attachment`,
-  `GET /api/profile/attachment/{type}`) — the LLM never touches the binary;
-  it only reads/writes the structured preference fields via
-  `get_user_profile` / `update_user_profile`.
-- The list shown on the Profile screen ("Passport scan — 42 KB, uploaded")
-  comes straight from RavenDB's own attachment metadata
-  (`session.advanced.get_metadata_for(doc)["@attachments"]`) — nothing is
-  duplicated as a field on the document just to track what's been uploaded.
-- Net effect: two cleanly separated channels on the same document — small,
-  queryable preference fields that flow into every chat turn's context, and
-  arbitrarily large binary documents that stay out of that path entirely,
-  fetched whole only when explicitly requested.
-
----
-
-## When to Show This to Customers
-
-Show this demo to prospects who are:
-
-- **Running LLM agents in production** and complaining about inference costs that
-  scale with traffic (the token-budget story lands immediately).
-- **Building RAG or agentic systems** where context retrieval is the bottleneck —
-  RavenDB as the retrieval layer beats a vector-only store because it also handles
-  structured queries, full-text search, and document updates in one product.
-- **On Kubernetes** already — the Operator demo shows zero-ops cluster management.
-- **Concerned about cloud egress** — any microservices shop paying AWS/GCP egress
-  fees between an API gateway and a downstream service will recognise the pattern.
-- **Replacing a mix of Redis + Postgres + a message broker** — show them that
-  subscriptions replace Kafka for this workload, bulk insert replaces ETL tooling,
-  and the document model replaces rigid schemas.
-
-Avoid this demo for customers who are purely on-prem without Kubernetes, or who
-have no LLM/AI workload yet — the hidden city domain will distract from the
-database message.
-
----
-
-## Four Infrastructure Stages (Evolutionary Path)
-
-### Stage 1 — Laptop / No persistence  *(~2021)*
-```
-User → Python script → Travelpayouts API → print results
-```
-- Every run re-fetches everything from the internet.
-- No memory between calls; no conversation history.
-- Cost: Travelpayouts free tier, but 100 % cache-miss rate.
-- **Pain:** 40 000+ tokens per query × every query. Demo breaks on API rate limits.
-
-### Stage 2 — Shared Redis + Postgres  *(~2022–2023)*
-```
-User → Flask app → Redis (TTL cache) → Travelpayouts
-                 → Postgres (conversation history)
-                 → Celery worker (polling cron)
-```
-- Redis gives cache hits for repeated routes, Postgres stores sessions.
-- Separate broker (RabbitMQ/Celery) for the price-watch cron.
-- **Pain:** Three infrastructure components to operate. Redis evicts on memory
-  pressure. Postgres schema migrations for every new field. Celery workers poll
-  every 5 min regardless of whether prices changed. Egress cost unchanged.
-
-### Stage 3 — Managed cloud search + vector DB  *(~2023–2024)*
-```
-User → FastAPI → Elasticsearch (routes) + pgvector (embeddings) + Redis
-               → Kafka (price events)
-```
-- Full-text search on airport names, semantic search on user intent.
-- Kafka for real-time price-drop events — finally no polling.
-- **Pain:** Five infrastructure components. Cloud-managed costs $800+/month for
-  HA. Egress from ES cluster to agent adds ~50 ms + 200 KB per call.
-  Three separate query languages (ES DSL, SQL, Redis commands).
-
-### Stage 4 — RavenDB in-cluster  *(this repo)*
-```
-User → FastAPI → RavenDB (routes + sessions + subscriptions)
-               → Travelpayouts (cache-miss only, ~5 %)
-```
-- One database replaces Redis, Postgres, Elasticsearch, and Kafka.
-- Subscriptions replace polling and the message broker entirely.
-- RavenDB Operator manages the 3-node cluster as a single Kubernetes resource.
-- **Result:** 96 % token reduction, 99.96 % egress reduction, 100 % fewer polling
-  calls. One operator to upgrade, one monitoring target, one backup strategy.
-
----
-
-## Prerequisites
-
-The table below lists everything you need installed before running this repo.
-The "Local dev" column covers the docker-compose path; the "Kubernetes" column
-covers the full cluster deployment.
-
-| Tool | Version | Local dev | Kubernetes | Install |
-|------|---------|-----------|------------|---------|
-| **Python** | 3.11–3.13 | required | required | [python.org](https://www.python.org/downloads/) — **3.14 not supported** (pyravendb dependency incompatibility) |
-| **uv** | latest | required | required | see below |
-| **Docker** | 24+ | required | — | [docs.docker.com](https://docs.docker.com/get-docker/) |
-| **Docker Compose** | v2 (bundled with Docker Desktop) | required | — | bundled with Docker Desktop |
-| **kubectl** | 1.28+ | — | required | [kubernetes.io](https://kubernetes.io/docs/tasks/tools/) |
-| **kind** | latest | — | required (local) | `winget install Kubernetes.kind` |
-| **Kubernetes cluster** | 1.28+ | — | required | kind (local, see below) / cloud provider |
-
-> **Windows note:** Docker Desktop on Windows requires either WSL 2 or Hyper-V.
-> Make sure one of these is enabled before installing Docker.
-
----
-
-## Python Environment Setup (uv)
-
-[uv](https://github.com/astral-sh/uv) replaces pip + venv in one fast tool.
-Install it once, then use it for all Python dependency work in this repo.
-
-### 1. Install uv
-
-**Windows (winget):**
-```powershell
-winget install astral-sh.uv
-```
-
-**macOS / Linux:**
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-**Fallback (pip):**
-```bash
-pip install uv
-```
-
-### 2. Create a virtual environment and install dependencies
-
-Run these once from the repo root:
-
-```bash
-uv venv                        # creates .venv in the repo root
-uv pip install -e ".[dev]"     # installs the package + all dev deps (pytest, ruff, …)
-```
-
-### 3. Activate the environment
-
-**Windows (PowerShell):**
-```powershell
-.venv\Scripts\Activate.ps1
-```
-
-**macOS / Linux:**
-```bash
-source .venv/bin/activate
-```
-
-After activation your prompt will show `(hidden-city)` and all `python` /
-`uvicorn` / `pytest` commands will use the repo's isolated environment.
-
-### Everyday uv commands
-
-```bash
-uv pip install <package>          # add a dependency
-uv pip install -e ".[dev]"        # re-sync after editing pyproject.toml
-uv pip list                       # list installed packages
-```
-
----
-
-## How to Run It
-
-> **Before you start:** the agent needs an **OpenAI API key** (`OPENAI_API_KEY`) to run
-> at all, and a free **RavenDB license** (`RAVENDB_LICENSE`) for RavenDB. The setup
-> wizard at `/setup` walks you through both — see
-> [Environment variables](#environment-variables) below if you'd rather set them manually.
-
-### Local (docker-compose)
-
-The fastest way is the included start script — it handles `.env`, RavenDB health
-checks, seeding, and launching the agent in one command:
-
-```powershell
-.\start.ps1             # RavenDB + seed + agent
-.\start.ps1 -Worker     # also starts the price-drop worker in a separate window
-.\start.ps1 -SkipSeed   # skip seeding when the database is already populated
-```
-
-Or step by step:
-
-```bash
-# 1. Copy environment variables file (only needed once)
-cp .env.example .env
-
-# 2. Start RavenDB
-docker compose up -d ravendb
-
-# 3. Seed airports and fixture routes
-uv run python -m scripts.seed_local
-
-# 4. Start the agent API
-uv run uvicorn src.agent.app:app --reload --port 8000
-
-# 5. (Optional) Start the price-drop subscription worker
-uv run python -m src.worker.run
-```
-
-The RavenDB Studio is available at http://localhost:8080 — no credentials needed
-in local mode. Open the `Routes` collection to inspect enriched documents.
-
-### Environment variables
-
-`start.ps1` copies `.env.example` to `.env` automatically and prompts for any
-missing keys on first run. You can also fill them in manually:
-
-| Variable | Required | Where to get it |
-|----------|----------|-----------------|
-| `OPENAI_API_KEY` | **Yes** — agent won't start without it | [platform.openai.com](https://platform.openai.com/) → API Keys |
-| `TRAVELPAYOUTS_TOKEN` | No — only needed for live price lookups and bulk scraper | [app.travelpayouts.com/profile](https://app.travelpayouts.com/profile/) → Aviasales Data API token |
-| `RAVENDB_URL` | Yes | `http://localhost:8080` for local dev (already set in `.env.example`) |
-| `RAVENDB_DATABASE` | Yes | `hidden-city` (already set in `.env.example`) |
-
-Without a Travelpayouts token the agent falls back to fixture data seeded by
-`scripts/seed_local.py`. All demo scenarios work on fixture data.
-
-### Kubernetes (local — kind)
-
-The fastest way to run the full Kubernetes stack locally, including the RavenDB
-Operator, is the included `start-k8s.ps1` script. It creates a local
-[kind](https://kind.sigs.k8s.io/) cluster, installs the operator, builds and
-loads the Docker image, deploys everything, and sets up port-forwards — one command:
-
-```powershell
-.\start-k8s.ps1
-```
-
-After everything is ready:
-
-| URL | What |
-|-----|------|
-| `http://localhost:8000` | Agent chat API |
-| `http://localhost:8000/docs` | Swagger UI |
-| `http://localhost:8080` | RavenDB Studio |
-
-Flags:
-
-```powershell
-.\start-k8s.ps1 -SkipBuild      # skip docker build (image already loaded into kind)
-.\start-k8s.ps1 -SkipOperator   # skip operator install (already installed)
-.\start-k8s.ps1 -DeleteCluster  # delete the kind cluster and exit
-```
-
-Press **Ctrl+C** to stop port-forwards. The cluster keeps running — subsequent
-runs with `-SkipBuild -SkipOperator` are fast (manifests reapplied, no rebuild).
-
-**Prerequisites for kind:**
-```powershell
-winget install Kubernetes.kind
-winget install Kubernetes.kubectl
-```
-Docker Desktop must be running.
-
-#### Show the operator in action
-
-```powershell
-# Watch the 3-node cluster come up
-kubectl get pods -n hidden-city -w
-
-# Check cluster status (operator sets Ready condition when Raft quorum is reached)
-kubectl get ravendbclusters -n hidden-city
-kubectl describe ravendbclusters ravendb-cluster -n hidden-city
-```
-
-### Kubernetes (cloud / CI)
-
-```bash
-# Install RavenDB Operator (one-time per cluster)
-bash k8s/operator/install.sh
-
-# Copy and fill in secrets
-cp k8s/secrets.yaml k8s/secrets.local.yaml
-# edit k8s/secrets.local.yaml
-
-# Deploy everything
-kubectl apply -f k8s/secrets.local.yaml
-kubectl apply -k k8s/
-
-# Check status
-kubectl -n hidden-city get pods
-kubectl get ravendbclusters -n hidden-city
-```
-
----
-
-## Testing the Agent
-
-### Run the test suite
-
-```bash
-uv run pytest tests/unit/ -v          # 50 unit tests, no external deps
-uv run pytest tests/integration/ -v  # requires running RavenDB
-```
-
-### Interactive chat via the REST API
-
-With the agent running on port 8000, send a chat message:
-
-```bash
-curl -s -X POST http://localhost:8000/chat \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user_id": "demo",
-    "session_id": "1",
-    "message": "Find me cheap flights from Warsaw to Chongqing with at most 1 stop"
-  }' | python -m json.tool
-```
-
-Or use the Swagger UI at http://localhost:8000/docs.
-
-#### Example: Warsaw → Chongqing (CKG) with max 1 stop
-
-Chongqing (IATA: `CKG`) is not in the fixture data, so the agent will:
-1. Call `search_routes(origin="WAW", destination="CKG")` — returns empty.
-2. Call `get_live_price(origin="WAW", destination="CKG", route_type="hidden_city")`
-   — hits Travelpayouts if token is set, otherwise returns `found: false`.
-3. Explain that no routes were found and suggest nearby hubs (IST, DOH, DXB are
-   common transfer points for Central Asia).
-
-With fixture data, try Warsaw → JFK (exits at London) as a hidden city example:
-
-```bash
-curl -s -X POST http://localhost:8000/chat \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user_id": "demo",
-    "session_id": "1",
-    "message": "Any hidden city options from Warsaw? I only have carry-on luggage."
-  }' | python -m json.tool
-```
-
-The agent will find WAW→JFK (via LHR) at ~$220 vs WAW→LHR direct at $580 — a
-62 % saving — and surface it with a `score: 0.62`. With carry-on only it will
-note the checked-baggage risk is eliminated, improving the adjusted score.
-
----
-
-## Project Structure
-
-```
-src/
-  agent/          FastAPI app + OpenAI tool-calling loop
-  tools/          4 MCP-style tools: search_routes, get_live_price,
-                  get_user_profile, save_conversation
-  db/             RavenDB client + Pydantic models
-  hidden_city/    Scoring algorithm + enricher
-  scraper/        Travelpayouts bulk ingest (CronJob)
-  worker/         RavenDB Subscription price-drop worker
-data/
-  airports.json   15 airports (WAW, LHR, FRA, JFK, …)
-scripts/
-  seed_local.py   Seed fixture data for local dev
-  measure_*.py    Token / egress cost measurement
-k8s/              Kubernetes manifests + RavenDB Operator config
-tests/
-  unit/           50 tests, no external dependencies
-  integration/    Requires live RavenDB
-```
-
----
+## Overview
+
+**This project solves the hidden cost problem in LLM agents by keeping the agent's working memory in the same cluster as the model call.** Instead of stuffing raw API responses into every prompt, the agent queries RavenDB — co-located in Kubernetes — as an explicit tool call. The LLM only ever sees a pre-structured, token-budgeted result, never the raw payload.
+
+**The application also demonstrates conversational hidden-city flight detection.** Airlines price connecting routes cheaper than direct legs; the agent compares cached and live prices from Travelpayouts, scores the savings against a risk profile, and surfaces the opportunity as information only — never automating a booking.
+
+**To fully embed itself in the Kubernetes ecosystem**, the RavenDB cluster is declared as a `RavenDBCluster` custom resource and reconciled by the [RavenDB Kubernetes Operator](https://github.com/ravendb/ravendb-operator), which handles bootstrap, certificate wiring, and rolling node upgrades. On top of this, a CronJob bulk-ingests Travelpayouts prices every 6 hours, and a RavenDB Data Subscription pushes price-drop alerts to a worker with no polling loop.
+
+**Built with RavenDB, Python, FastAPI, the OpenAI API, and Kubernetes.**
+
+## Features used
+
+The following RavenDB features are used to build the application:
+
+1. AI / Agent Integration
+   1. Tool-calling agent loop (OpenAI `gpt-4o-mini`) — RavenDB is queried only through explicit LLM tool calls, never injected as a sidecar — [`src/agent/loop.py`](src/agent/loop.py)
+   1. Single-call fast path — a narrow exception that pre-resolves unambiguous "from X to Y" messages before calling the LLM at all, cutting a turn from two OpenAI calls to one — [`src/tools/resolve_airports.py`](src/tools/resolve_airports.py)
+1. Document & Query Features
+   1. Document Store — schema-flexible route, session, and airport documents, no migrations — [`src/db/models.py`](src/db/models.py)
+   1. Auto-Indexes (full-text search) — airport city/IATA lookup with no static index ever defined — [`src/tools/resolve_airports.py`](src/tools/resolve_airports.py)
+   1. Vector Search — nearby-airport fallback using a 3D unit-sphere projection of each airport's lat/lng — [`src/tools/search_routes.py`](src/tools/search_routes.py), [`src/db/geo.py`](src/db/geo.py)
+   1. Document Expiration — price fields auto-expire 20 minutes after write via `@expires` metadata, no cleanup job — [`src/db/expiration.py`](src/db/expiration.py)
+   1. Attachments — passport scan, bag photo, and a preference PDF stored as binary blobs on the user document, never inflating a query — [`src/tools/user_attachments.py`](src/tools/user_attachments.py)
+   1. Data Subscriptions — push-only price-drop alerts, no polling and no message broker — [`src/worker/run.py`](src/worker/run.py)
+1. Kubernetes
+   1. RavenDB Kubernetes Operator — a 3-node cluster declared as a CRD; bootstrap, cert wiring, and rolling upgrades are handled automatically — [ravendb-operator](https://github.com/ravendb/ravendb-operator), [`k8s/operator/`](k8s/operator/)
+
+## Technologies
+
+The following technologies were used to build this application:
+
+1. RavenDB 7.2
+1. Python 3.11–3.13
+1. FastAPI + Uvicorn
+1. OpenAI API (`gpt-4o-mini`)
+1. Kubernetes + RavenDB Kubernetes Operator
+1. Docker / Docker Compose
+1. kind, Helm, kubectl (local Kubernetes)
+1. uv (Python package/venv manager)
+1. Plain HTML/JS chat UI
+
+## Local setup
+
+A few steps are required to run the application locally.
+
+1. Check out the Git repository
+1. Install prerequisites:
+   1. [Python 3.11–3.13](https://www.python.org/downloads/) — 3.14 is not yet supported (pyravendb dependency)
+   1. [uv](https://github.com/astral-sh/uv)
+   1. [Docker](https://docs.docker.com/get-docker/) + Docker Compose (bundled with Docker Desktop) — Kubernetes mode's `start-k8s.ps1` will also install Docker Desktop via `winget` if it's missing, but Docker Desktop's first launch needs one manual step (accept the license, finish WSL2/Hyper-V setup, possibly reboot) before the script can continue
+   1. Kubernetes mode only — `start-k8s.ps1` installs all of these automatically via `winget` if missing, no manual setup required:
+      1. [kubectl](https://kubernetes.io/docs/tasks/tools/), [Helm](https://helm.sh/), [kind](https://kind.sigs.k8s.io/) — checked and installed unconditionally at startup
+      1. [OpenSSL](https://www.openssl.org/) — only checked/installed if the RavenDB TLS cert chain (`k8s/ravendb/certs/`) doesn't already exist locally; skipped entirely once that chain has been generated once
+1. Run `.\start.ps1` and pick a mode when prompted, or skip the prompt directly:
+   1. `.\start.ps1 -Mode Local` — docker-compose RavenDB, seeds fixture data, starts the agent
+   1. `.\start.ps1 -Mode K8s` — kind cluster + cert-manager + ingress-nginx + RavenDB Operator + full app deployment
+1. Before the first run, both modes prompt you interactively in the terminal (Enter to skip an optional value) for:
+   1. `OPENAI_API_KEY` — required, the agent won't start without it ([platform.openai.com](https://platform.openai.com/))
+   1. `TRAVELPAYOUTS_TOKEN` — optional; without it the agent falls back to fixture data seeded by `scripts/seed_local.py`
+   1. The RavenDB license is picked up silently from `license.json` in the repo root if present, otherwise Local mode runs RavenDB in Developer Mode (3 GB / 1 node limit) and Kubernetes mode skips the license secret with a warning
+1. Once the agent is running, its landing page links to a `/setup` wizard (`http://localhost:8000/setup`) that walks through all three of `OPENAI_API_KEY`, `RAVENDB_LICENSE`, and `TRAVELPAYOUTS_TOKEN` in the browser and writes whichever you fill in to `.env` — the easiest way to add a key you skipped in the terminal, or to hand the demo to someone without shell access.
+1. RavenDB Studio is available at `http://localhost:8080` (Local mode) or `https://localhost:8081` (Kubernetes mode — self-signed cert, browser will warn). Open the `Routes` collection to inspect enriched documents.
+
+## Remarks
+
+Without a Travelpayouts token, every demo scenario still runs end to end on fixture data seeded by `scripts/seed_local.py` — no live API dependency is required to see the full flow.
+
+The bulk scraper's Travelpayouts endpoint only returns price and a transfer count, never the actual connecting airport — real itinerary segments require a partnership-gated API this project doesn't have. For routes with transfers, the scraper instead infers the likely hub offline from airport coordinates already in RavenDB. It's a heuristic, not ground truth — see [`src/scraper/hub_inference.py`](src/scraper/hub_inference.py).
+
+Kubernetes mode automates cert-manager, ingress-nginx, the RavenDB Operator, and the app deployment end to end — including the RavenDB cluster's TLS certificate chain, which `start-k8s.ps1` generates locally as a self-signed CA/server/client chain via `openssl` (see `Ensure-RavenDbCerts` in the script) and applies as Kubernetes secrets automatically. No manual Setup Wizard step or `kubectl create secret` command is required.
+
+See [`docs/architecture.md`](docs/architecture.md) for the full token/egress cost breakdown across four infrastructure stages, and [`docs/hidden-city.md`](docs/hidden-city.md) for the hidden-city detection algorithm spec.
 
 ## Legal Note
 
-This project demonstrates the *detection* of hidden city pricing patterns for
-educational purposes. It does not automate booking, generate itineraries, or
-interact with airline reservation systems. Consult an airline's terms of service
-before applying hidden city strategies to real bookings.
+This project demonstrates the *detection* of hidden city pricing patterns for educational purposes. It does not automate booking, generate itineraries, or interact with airline reservation systems. Consult an airline's terms of service before applying hidden city strategies to real bookings.

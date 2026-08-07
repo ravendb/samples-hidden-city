@@ -1,17 +1,52 @@
-# start.ps1 -- starts the full local stack in one command
+# start.ps1 -- single entry point: pick Local (docker-compose) or Kubernetes, then run it
 #
 # Usage:
-#   .\start.ps1             # RavenDB + seed + agent
-#   .\start.ps1 -Worker     # also starts the price-drop worker in a separate window
-#   .\start.ps1 -SkipSeed   # skip seeding when the database is already populated
+#   .\start.ps1                    # prompts: [1] Local  [2] Kubernetes
+#   .\start.ps1 -Mode Local        # skip the prompt, run the local docker-compose stack
+#   .\start.ps1 -Mode K8s          # skip the prompt, run the kind/operator stack (start-k8s.ps1)
+#   .\start.ps1 -Worker            # (Local) also start the price-drop worker in a separate window
+#   .\start.ps1 -SkipSeed          # (Local) skip seeding when the database is already populated
+#   .\start.ps1 -Mode K8s -SkipBuild -SkipOperator   # (K8s) forwarded to start-k8s.ps1
+#   .\start.ps1 -DeleteCluster      # (K8s) delete the kind cluster and exit
 
 param(
-    [switch]$Worker,    # start the subscription worker in a separate window
-    [switch]$SkipSeed   # skip seed_local (when the database is already seeded)
+    [ValidateSet("Local", "K8s", "")]
+    [string]$Mode = "",
+    [switch]$Worker,        # (Local) start the subscription worker in a separate window
+    [switch]$SkipSeed,      # (Local) skip seed_local (when the database is already seeded)
+    [switch]$SkipBuild,     # (K8s) skip docker build, forwarded to start-k8s.ps1
+    [switch]$SkipOperator,  # (K8s) skip operator install, forwarded to start-k8s.ps1
+    [switch]$DeleteCluster, # (K8s) delete the kind cluster and exit, forwarded to start-k8s.ps1
+    [string]$ClusterName = "hidden-city"
 )
 
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
+
+# --- k8s cluster teardown shortcut (no mode picker needed) ---
+if ($DeleteCluster) {
+    & "$root\start-k8s.ps1" -DeleteCluster -ClusterName $ClusterName
+    exit $LASTEXITCODE
+}
+
+# --- pick Local vs Kubernetes ---
+if (-not $Mode) {
+    Write-Host ""
+    Write-Host "  How do you want to run this demo?" -ForegroundColor Cyan
+    Write-Host "    [1] Local       - docker-compose, fastest to start" -ForegroundColor Gray
+    Write-Host "    [2] Kubernetes  - kind cluster + RavenDB Operator, full k8s demo" -ForegroundColor Gray
+    Write-Host ""
+    $choice = Read-Host "  Enter 1 or 2 (default: 1)"
+    $Mode = if ($choice -eq "2") { "K8s" } else { "Local" }
+}
+
+if ($Mode -eq "K8s") {
+    Write-Host "`n  Kubernetes mode selected -- handing off to start-k8s.ps1`n" -ForegroundColor Cyan
+    & "$root\start-k8s.ps1" -SkipBuild:$SkipBuild -SkipOperator:$SkipOperator -ClusterName $ClusterName
+    exit $LASTEXITCODE
+}
+
+Write-Host "`n  Local mode selected -- docker-compose stack`n" -ForegroundColor Cyan
 
 function Write-Step($n, $total, $msg) {
     Write-Host "`n[$n/$total] $msg" -ForegroundColor Cyan
@@ -37,6 +72,24 @@ function Find-Uv {
         if (Test-Path $c) { return $c }
     }
     return $null
+}
+
+function Install-Uv {
+    Write-Warn "uv not found -- installing automatically..."
+    $winget = Get-Command winget -ErrorAction SilentlyContinue
+    if ($winget) {
+        winget install --id astral-sh.uv -e --silent --accept-package-agreements --accept-source-agreements
+    } else {
+        Write-Host "  winget not available, falling back to the official install script..." -ForegroundColor Gray
+        Invoke-Expression (Invoke-RestMethod -Uri "https://astral.sh/uv/install.ps1")
+    }
+    $uv = Find-Uv
+    if (-not $uv) {
+        Write-Error "uv installation finished but the executable could not be located. Reopen this terminal and try again."
+        exit 1
+    }
+    Write-Ok "uv installed"
+    return $uv
 }
 
 function Get-EnvValue($lines, $key) {
@@ -71,8 +124,7 @@ if (Test-Path $python) {
 if (-not (Test-Path $python)) {
     $uv = Find-Uv
     if (-not $uv) {
-        Write-Error "uv not found. Install it: winget install astral-sh.uv, then reopen this terminal."
-        exit 1
+        $uv = Install-Uv
     }
     Write-Host "`n  Creating venv (Python 3.11-3.13)..." -ForegroundColor Gray
     & $uv venv --python ">=3.11,<3.14" "$root\.venv"
@@ -112,13 +164,16 @@ if (Test-Path "$root\license.json") {
 $envLines = Get-Content "$root\.env"
 
 $keysInfo = @(
-    @{ Key = "OPENAI_API_KEY";      Desc = "OpenAI API key (agent won't start without it)";                       Required = $true  },
-    @{ Key = "TRAVELPAYOUTS_TOKEN"; Desc = "Travelpayouts / Aviasales Data API token (optional, bulk scraper)";   Required = $false }
+    @{ Key = "OPENAI_API_KEY";       Desc = "OpenAI API key (agent won't start without it)";                       Required = $true;  Placeholder = "sk-..." },
+    @{ Key = "TRAVELPAYOUTS_TOKEN";  Desc = "Travelpayouts / Aviasales Data API token (optional, bulk scraper)";   Required = $false; Placeholder = "..." }
 )
 
 $anyMissing = $false
 foreach ($k in $keysInfo) {
-    if (-not (Get-EnvValue $envLines $k.Key)) {
+    $currentValue = Get-EnvValue $envLines $k.Key
+    # A fresh .env copied from .env.example carries its literal placeholder
+    # value (e.g. "sk-...") -- that must be treated as unset, not as a real key.
+    if (-not $currentValue -or $currentValue -eq $k.Placeholder) {
         if (-not $anyMissing) {
             Write-Host ""
             Write-Warn "Some API keys are missing in .env. Enter values now or press Enter to skip."
@@ -145,6 +200,7 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 Write-Ok "RavenDB ready"
+Write-Host "  RavenDB Studio: http://localhost:8080" -ForegroundColor Gray
 
 # --- step 2: seed (optional) ---
 if (-not $SkipSeed) {
@@ -158,9 +214,10 @@ if (-not $SkipSeed) {
 }
 
 # --- worker in a separate window (optional) ---
+$workerProcess = $null
 if ($Worker) {
     Write-Host "`n  Starting price-drop worker in a separate window..." -ForegroundColor Gray
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", "& '$python' -m src.worker.run"
+    $workerProcess = Start-Process powershell -ArgumentList "-NoExit", "-Command", "& '$python' -m src.worker.run" -PassThru
     Write-Ok "Worker started (separate window)"
 }
 
@@ -170,4 +227,17 @@ Write-Host "  Swagger UI:    http://localhost:8000/docs" -ForegroundColor Gray
 Write-Host "  RavenDB Studio: http://localhost:8080" -ForegroundColor Gray
 Write-Host ""
 
-& $uvicorn src.agent.app:app --reload --port 8000
+# Ctrl+C (or any exit) runs the finally block -- without this, docker compose's
+# RavenDB container keeps holding port 8080 (and 38888) after the "demo" looks
+# stopped, which is exactly what silently conflicted with the Kubernetes mode's
+# own port-forward on 8080 earlier.
+try {
+    & $uvicorn src.agent.app:app --reload --port 8000
+} finally {
+    Write-Host "`n  Stopping RavenDB (docker compose down) to release its ports..." -ForegroundColor Gray
+    docker compose down
+    if ($workerProcess -and -not $workerProcess.HasExited) {
+        $workerProcess.Kill()
+    }
+    Write-Ok "Stopped -- ports 8080/38888 released"
+}

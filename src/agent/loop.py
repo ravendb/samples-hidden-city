@@ -7,21 +7,28 @@ The loop logs actual usage from the API response so measure_tokens.py can track 
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from typing import AsyncGenerator
 
 from openai import AsyncOpenAI
 
 from src.agent.prompts import SYSTEM_PROMPT
-from src.tools.definitions import TOOL_DEFINITIONS
+from src.db.client import get_store
+from src.tools.definitions import select_tools
 from src.tools.dispatcher import dispatch_tool
+from src.tools.resolve_airports import resolve_origin_destination
 
 log = logging.getLogger(__name__)
 
 _DEFAULT_MODEL = "gpt-4o-mini"
 MAX_RESPONSE_TOKENS = 400
 MAX_ITERATIONS = 10
-WARN_TOOL_TOKENS = 800  # log a warning when tool results exceed this
+WARN_TOOL_TOKENS = 800  # tool-result budget for the WHOLE turn, not per call — see
+# how tool_tokens_used is threaded through run_agent/stream_agent below
+
+# Numbers with 2+ digits — catches prices/scores but not stray single digits ("1 stop").
+_NUMBER_RE = re.compile(r"\d{2,}(?:[.,]\d+)?")
 
 
 @dataclass
@@ -32,6 +39,7 @@ class AgentResult:
     tool_calls: int = 0
     iterations: int = 0
     tool_token_warnings: list[str] = field(default_factory=list)
+    grounding_warnings: list[str] = field(default_factory=list)
 
     @property
     def total_tokens(self) -> int:
@@ -48,6 +56,18 @@ def _truncate_tool_result(result_json: str, max_tokens: int = WARN_TOOL_TOKENS) 
     if len(result_json) <= max_chars:
         return result_json
     return result_json[:max_chars] + ' "…truncated"}'
+
+
+def _find_ungrounded_numbers(response_text: str, known_data: str) -> list[str]:
+    """Flag numbers (likely prices/scores) in the reply that don't appear anywhere in
+    the system prompt (preloaded preferences), the user's message, or this turn's tool
+    results. A hit doesn't prove hallucination (the model may compute a % savings), but
+    it's the cheapest mechanical check for the "never state a price ... not returned by
+    a tool" rule in SYSTEM_PROMPT — cheaper than parsing city/IATA names out of prose.
+    """
+    in_response = set(_NUMBER_RE.findall(response_text))
+    in_data = set(_NUMBER_RE.findall(known_data))
+    return sorted(in_response - in_data)
 
 
 def _format_preferences(preferences: dict | None) -> str:
@@ -96,6 +116,35 @@ def _build_system_content(user_id: str, session_id: str, preferences: dict | Non
     )
 
 
+async def _try_fast_path(
+    user_message: str, preferences: dict | None
+) -> tuple[dict, dict] | None:
+    """Single-call fast path: resolve an unambiguous "from X to Y" message via
+    RavenDB (src/tools/resolve_airports.py) and pre-fetch search_routes
+    ourselves, so the model never has to spend a tool-calling round trip
+    deciding to call it. Returns (resolved, tool_result) on success; None
+    (ambiguous message, no match, or any failure) means the caller falls back
+    to the normal multi-turn tool-calling loop below, unchanged."""
+    try:
+        resolved = resolve_origin_destination(get_store(), user_message)
+        if not resolved:
+            return None
+        tool_result = await dispatch_tool("search_routes", resolved, preferences=preferences)
+        return resolved, tool_result
+    except Exception:
+        log.exception("Fast-path resolution/search failed -- falling back to tool-calling flow")
+        return None
+
+
+def _build_fast_path_content(user_message: str, resolved: dict, tool_result: dict) -> str:
+    result_json = json.dumps(tool_result, default=str)
+    return (
+        f"{user_message}\n\n"
+        f"[search_routes({resolved['origin']}->{resolved['destination']}) already run, "
+        f"result: {result_json}]"
+    )
+
+
 async def run_agent(
     user_message: str,
     prior_turns: list[dict],
@@ -112,6 +161,40 @@ async def run_agent(
     """
     client = AsyncOpenAI()
     system_content = _build_system_content(user_id, session_id, preferences)
+
+    fast_path = await _try_fast_path(user_message, preferences)
+    if fast_path is not None:
+        resolved, tool_result = fast_path
+        user_content = _build_fast_path_content(user_message, resolved, tool_result)
+        messages = (
+            [{"role": "system", "content": system_content}]
+            + prior_turns
+            + [{"role": "user", "content": user_content}]
+        )
+        response = await client.chat.completions.create(
+            model=os.getenv("LLM_MODEL", _DEFAULT_MODEL),
+            max_tokens=MAX_RESPONSE_TOKENS,
+            messages=messages,
+        )
+        text = response.choices[0].message.content
+        if text is not None:
+            known_data = system_content + user_content
+            ungrounded = _find_ungrounded_numbers(text, known_data)
+            if ungrounded:
+                warning = f"reply contains numbers not seen in tool output or preferences: {ungrounded}"
+                log.warning(warning)
+            return AgentResult(
+                response=text,
+                input_tokens=response.usage.prompt_tokens,
+                output_tokens=response.usage.completion_tokens,
+                tool_calls=1,
+                iterations=1,
+                grounding_warnings=[warning] if ungrounded else [],
+            )
+        # No text content (unexpected without tools offered) -- fall through to
+        # the normal loop below rather than return something broken.
+
+    tools = select_tools(user_message)
     messages = (
         [{"role": "system", "content": system_content}]
         + prior_turns
@@ -121,13 +204,22 @@ async def run_agent(
     total_input = 0
     total_output = 0
     tool_calls = 0
+    tool_tokens_used = 0  # cumulative across the WHOLE turn — WARN_TOOL_TOKENS is
+    # a per-turn budget, not a per-call one; see _truncate_tool_result call below
     token_warnings: list[str] = []
+    grounding_warnings: list[str] = []
+    tool_result_texts: list[str] = []
 
     for iteration in range(1, MAX_ITERATIONS + 1):
+        # Force at least one tool call on the first turn — otherwise "auto" lets the
+        # model skip search_routes/get_live_prices entirely and answer from parametric
+        # knowledge, which is the main way ungrounded city names/prices sneak in.
+        tool_choice = "required" if iteration == 1 else "auto"
         response = await client.chat.completions.create(
             model=os.getenv("LLM_MODEL", _DEFAULT_MODEL),
             max_tokens=MAX_RESPONSE_TOKENS,
-            tools=TOOL_DEFINITIONS,
+            tools=tools,
+            tool_choice=tool_choice,
             messages=messages,
         )
 
@@ -146,6 +238,14 @@ async def run_agent(
             text = choice.message.content
             if text is None:
                 raise ValueError("OpenAI returned stop with no text content")
+
+            known_data = system_content + user_message + "".join(tool_result_texts)
+            ungrounded = _find_ungrounded_numbers(text, known_data)
+            if ungrounded:
+                warning = f"reply contains numbers not seen in tool output or preferences: {ungrounded}"
+                log.warning(warning)
+                grounding_warnings.append(warning)
+
             return AgentResult(
                 response=text,
                 input_tokens=total_input,
@@ -153,6 +253,7 @@ async def run_agent(
                 tool_calls=tool_calls,
                 iterations=iteration,
                 tool_token_warnings=token_warnings,
+                grounding_warnings=grounding_warnings,
             )
 
         if choice.finish_reason == "tool_calls":
@@ -176,16 +277,23 @@ async def run_agent(
             for tc in choice.message.tool_calls or []:
                 tool_calls += 1
                 tool_input = json.loads(tc.function.arguments)
-                result = await dispatch_tool(tc.function.name, tool_input)
+                result = await dispatch_tool(tc.function.name, tool_input, preferences=preferences)
                 result_json = json.dumps(result, default=str)
 
                 estimated = _estimate_tokens(result_json)
-                if estimated > WARN_TOOL_TOKENS:
-                    warning = f"{tc.function.name} result ~{estimated} tokens (budget {WARN_TOOL_TOKENS})"
+                remaining_budget = max(0, WARN_TOOL_TOKENS - tool_tokens_used)
+                if estimated > remaining_budget:
+                    warning = (
+                        f"{tc.function.name} result ~{estimated} tokens, only {remaining_budget} "
+                        f"left of this turn's {WARN_TOOL_TOKENS}-token tool budget"
+                    )
                     log.warning(warning)
                     token_warnings.append(warning)
-                    result_json = _truncate_tool_result(result_json)
+                    result_json = _truncate_tool_result(result_json, max_tokens=remaining_budget)
+                    estimated = _estimate_tokens(result_json)
+                tool_tokens_used += estimated
 
+                tool_result_texts.append(result_json)
                 tool_results.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
@@ -207,26 +315,86 @@ async def stream_agent(
     """Streaming variant -- yields SSE-formatted strings for /chat/stream."""
     client = AsyncOpenAI()
     system_content = _build_system_content(user_id, session_id, preferences)
+
+    def sse(data: dict) -> str:
+        return f"data: {json.dumps(data)}\n\n"
+
+    # Same single-call fast path as run_agent -- see _try_fast_path's docstring.
+    fast_path = await _try_fast_path(user_message, preferences)
+    if fast_path is not None:
+        resolved, tool_result = fast_path
+        yield sse({"type": "tool_call", "name": "search_routes"})
+        user_content = _build_fast_path_content(user_message, resolved, tool_result)
+        fp_messages = (
+            [{"role": "system", "content": system_content}]
+            + prior_turns
+            + [{"role": "user", "content": user_content}]
+        )
+        fp_stream = await client.chat.completions.create(
+            model=os.getenv("LLM_MODEL", _DEFAULT_MODEL),
+            max_tokens=MAX_RESPONSE_TOKENS,
+            messages=fp_messages,
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+        fp_content: list[str] = []
+        fp_input, fp_output = 0, 0
+        async for chunk in fp_stream:
+            if chunk.usage:
+                fp_input += chunk.usage.prompt_tokens
+                fp_output += chunk.usage.completion_tokens
+                continue
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if delta.content:
+                fp_content.append(delta.content)
+                yield sse({"type": "delta", "text": delta.content})
+
+        final_text = "".join(fp_content)
+        if final_text:
+            known_data = system_content + user_content
+            ungrounded = _find_ungrounded_numbers(final_text, known_data)
+            if ungrounded:
+                log.warning(
+                    "reply contains numbers not seen in tool output or preferences: %s",
+                    ungrounded,
+                )
+            yield sse({
+                "type": "done",
+                "response": final_text,
+                "input_tokens": fp_input,
+                "output_tokens": fp_output,
+                "total_tokens": fp_input + fp_output,
+                "tool_calls": 1,
+                "grounding_warnings": ungrounded,
+            })
+            return
+        # No content streamed (unexpected) -- fall through to the normal loop below.
+
+    tools = select_tools(user_message)
     messages = (
         [{"role": "system", "content": system_content}]
         + prior_turns
         + [{"role": "user", "content": user_message}]
     )
     total_input, total_output, tool_calls_count = 0, 0, 0
+    tool_tokens_used = 0  # cumulative across the WHOLE turn — see run_agent
+    tool_result_texts: list[str] = []
 
-    def sse(data: dict) -> str:
-        return f"data: {json.dumps(data)}\n\n"
-
-    for _ in range(MAX_ITERATIONS):
+    for iteration in range(1, MAX_ITERATIONS + 1):
         accumulated_content: list[str] = []
         accumulated_tool_calls: dict[int, dict] = {}
         finish_reason = None
 
+        # Same first-turn grounding guard as run_agent — see comment there.
+        tool_choice = "required" if iteration == 1 else "auto"
         stream = await client.chat.completions.create(
             model=os.getenv("LLM_MODEL", _DEFAULT_MODEL),
             max_tokens=MAX_RESPONSE_TOKENS,
             messages=messages,
-            tools=TOOL_DEFINITIONS,
+            tools=tools,
+            tool_choice=tool_choice,
             stream=True,
             stream_options={"include_usage": True},
         )
@@ -259,12 +427,23 @@ async def stream_agent(
                             accumulated_tool_calls[idx]["arguments"] += tc_delta.function.arguments
 
         if finish_reason == "stop":
+            final_text = "".join(accumulated_content)
+            known_data = system_content + user_message + "".join(tool_result_texts)
+            ungrounded = _find_ungrounded_numbers(final_text, known_data)
+            if ungrounded:
+                log.warning(
+                    "reply contains numbers not seen in tool output or preferences: %s",
+                    ungrounded,
+                )
+
             yield sse({
                 "type": "done",
+                "response": final_text,
                 "input_tokens": total_input,
                 "output_tokens": total_output,
                 "total_tokens": total_input + total_output,
                 "tool_calls": tool_calls_count,
+                "grounding_warnings": ungrounded,
             })
             return
 
@@ -288,11 +467,21 @@ async def stream_agent(
                 tool_calls_count += 1
                 yield sse({"type": "tool_call", "name": tc["name"]})
                 tool_input = json.loads(tc["arguments"])
-                result = await dispatch_tool(tc["name"], tool_input)
+                result = await dispatch_tool(tc["name"], tool_input, preferences=preferences)
                 result_json = json.dumps(result, default=str)
-                if _estimate_tokens(result_json) > WARN_TOOL_TOKENS:
-                    log.warning("%s result over budget in stream", tc["name"])
-                    result_json = _truncate_tool_result(result_json)
+
+                estimated = _estimate_tokens(result_json)
+                remaining_budget = max(0, WARN_TOOL_TOKENS - tool_tokens_used)
+                if estimated > remaining_budget:
+                    log.warning(
+                        "%s result ~%d tokens, only %d left of this turn's %d-token tool budget",
+                        tc["name"], estimated, remaining_budget, WARN_TOOL_TOKENS,
+                    )
+                    result_json = _truncate_tool_result(result_json, max_tokens=remaining_budget)
+                    estimated = _estimate_tokens(result_json)
+                tool_tokens_used += estimated
+
+                tool_result_texts.append(result_json)
                 tool_results.append({
                     "role": "tool",
                     "tool_call_id": tc["id"],

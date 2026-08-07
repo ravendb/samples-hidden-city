@@ -6,7 +6,6 @@ namespace: hidden-city
 resources:
   - namespace.yaml
   - configmap.yaml
-  - ravendb/ravendb-cluster.yaml
   - agent/deployment.yaml
   - agent/service.yaml
   - agent/ingress.yaml
@@ -17,3 +16,9 @@ resources:
 #   cp k8s/secrets.yaml k8s/secrets.local.yaml
 #   vim k8s/secrets.local.yaml          # fill in real values
 #   kubectl apply -f k8s/secrets.local.yaml
+#
+# The RavenDB cluster itself is NOT applied via kustomize — the operator's
+# RavenDBCluster CRD is deployed as a Helm chart (ravendb-operator/ravendb-cluster),
+# using k8s/ravendb/values.yaml. Run k8s/operator/install.sh first, then:
+#   helm upgrade --install ravendb-cluster ravendb-operator/ravendb-cluster \
+#     -n hidden-city --create-namespace -f k8s/ravendb/values.yaml

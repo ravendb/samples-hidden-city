@@ -25,6 +25,13 @@ spec:
                 name: hidden-city-config
             - secretRef:
                 name: hidden-city-secrets
+          volumeMounts:
+            - name: ravendb-client-cert
+              mountPath: /certs/client
+              readOnly: true
+            - name: ravendb-ca-cert
+              mountPath: /certs/ca
+              readOnly: true
           resources:
             requests:
               memory: "128Mi"
@@ -32,3 +39,10 @@ spec:
             limits:
               memory: "256Mi"
               cpu: "200m"
+      volumes:
+        - name: ravendb-client-cert
+          secret:
+            secretName: ravendb-client-cert
+        - name: ravendb-ca-cert
+          secret:
+            secretName: ravendb-ca-cert

@@ -15,16 +15,14 @@ user is read back from RavenDB's own attachment metadata
 (session.advanced.get_metadata_for(doc)["@attachments"]) rather than duplicated
 as a field on the document.
 """
-import io
 import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from pyravendb.commands.commands_data import PutDocumentCommand
-from pyravendb.data.operation import AttachmentType
-from pyravendb.raven_operations.operations import GetAttachmentOperation, PutAttachmentOperation
+from ravendb import GetAttachmentOperation, PutAttachmentOperation
+from ravendb.data.operation import AttachmentType
 
-from src.db.client import get_store
+from src.db.client import get_store, put_document
 
 log = logging.getLogger(__name__)
 
@@ -42,7 +40,18 @@ def _ensure_user_doc(user_id: str) -> None:
         "last_updated": datetime.now(timezone.utc).isoformat(),
         "@metadata": {"@collection": "Users"},
     }
-    store.get_request_executor().execute(PutDocumentCommand(key=f"users/{user_id}", document=doc))
+    put_document(store, f"users/{user_id}", doc)
+
+
+def _as_single_chunk(content: bytes):
+    """ravendb==7.2.3.post1's PutAttachmentOperation mishandles anything that
+    isn't a generator: raw bytes get routed through requests' multipart `files=`
+    upload (storing the multipart envelope itself as the attachment content,
+    not the raw bytes), and any other object hits the executor's generic
+    json.dumps(request.data) call and crashes as non-serializable. A one-shot
+    generator yielding the raw bytes is the only input shape that skips both
+    broken paths and stores the exact bytes given."""
+    yield content
 
 
 def save_user_attachment(
@@ -56,7 +65,9 @@ def save_user_attachment(
     _ensure_user_doc(user_id)
     store = get_store()
     store.operations.send(
-        PutAttachmentOperation(f"users/{user_id}", attachment_type, io.BytesIO(content), content_type)
+        PutAttachmentOperation(
+            f"users/{user_id}", attachment_type, _as_single_chunk(content), content_type
+        )
     )
 
     log.info(
@@ -75,17 +86,22 @@ def list_user_attachments(user_id: str) -> list[dict]:
         if doc is None:
             return []
         metadata = session.advanced.get_metadata_for(doc)
-    return metadata.get("@attachments", [])
+    return [dict(a) for a in metadata.get("@attachments", [])]
 
 
 def get_user_attachment(user_id: str, attachment_type: str) -> Optional[dict]:
     store = get_store()
-    result = store.operations.send(
-        GetAttachmentOperation(f"users/{user_id}", attachment_type, AttachmentType.document, None)
-    )
+    try:
+        result = store.operations.send(
+            GetAttachmentOperation(f"users/{user_id}", attachment_type, AttachmentType.document, None)
+        )
+    except ValueError:
+        # A missing document or missing attachment both surface as a generic
+        # "Response is invalid" ValueError in this client version rather than None.
+        return None
     if result is None:
         return None
     return {
-        "content": result["response"].content,
-        "content_type": result["details"].get("content_type"),
+        "content": result.data,
+        "content_type": result.details.content_type,
     }

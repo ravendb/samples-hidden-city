@@ -68,11 +68,19 @@ ok "Namespace '$NS' ready"
 kubectl apply -f k8s/secrets.local.yaml
 ok "Secrets applied"
 
-# ── step 4: full kustomize apply ──────────────────────────────────────────────
-step "Applying all manifests  (kubectl apply -k k8s/)"
+# ── step 4: RavenDB cluster (Helm chart, not kustomize) ──────────────────────
+step "Installing RavenDB cluster  (helm upgrade --install ravendb-cluster ...)"
+echo "    Requires the license/cert secrets referenced by k8s/ravendb/values.yaml"
+echo "    to already exist in namespace '$NS' — see k8s/operator/install.sh."
+helm upgrade --install ravendb-cluster ravendb-operator/ravendb-cluster \
+  -n "$NS" --create-namespace -f k8s/ravendb/values.yaml
+ok "RavenDB cluster chart applied"
+
+# ── step 5: full kustomize apply (rest of the app) ────────────────────────────
+step "Applying app manifests  (kubectl apply -k k8s/)"
 kubectl apply -k k8s/
 
-# ── step 5: wait for RavenDB cluster ─────────────────────────────────────────
+# ── step 6: wait for RavenDB cluster ─────────────────────────────────────────
 step "Waiting for RavenDB cluster to be ready (operator reconciliation)"
 echo "    This typically takes 60–120 s on first install."
 echo "    The operator is: creating PVCs → starting pods → forming Raft quorum → issuing TLS certs."
@@ -105,12 +113,12 @@ echo ""
 kubectl get pods -n "$NS" -l app.kubernetes.io/name=ravendb-cluster 2>/dev/null \
   || kubectl get pods -n "$NS" | grep ravendb || true
 
-# ── step 6: wait for agent ────────────────────────────────────────────────────
+# ── step 7: wait for agent ────────────────────────────────────────────────────
 step "Waiting for agent deployment to roll out"
 kubectl rollout status deployment/agent -n "$NS" --timeout=120s
 ok "Agent deployment ready"
 
-# ── step 7: final status ──────────────────────────────────────────────────────
+# ── step 8: final status ──────────────────────────────────────────────────────
 step "Deployment complete — cluster status"
 
 echo ""

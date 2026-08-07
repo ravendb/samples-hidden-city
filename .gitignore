@@ -2,6 +2,7 @@
 .env.local
 license.json
 *.local.yaml
+k8s/ravendb/certs/
 __pycache__/
 *.pyc
 *.pyo

@@ -63,7 +63,7 @@ class TestRunAgent:
 
         dispatched = []
 
-        async def mock_dispatch(name, tool_input):
+        async def mock_dispatch(name, tool_input, preferences=None):
             dispatched.append(name)
             return {"routes": [], "count": 0}
 
@@ -118,7 +118,7 @@ class TestRunAgent:
         large_result = {"routes": [{"data": "x" * 16000}]}  # ~4000 tokens
         captured_tool_messages = []
 
-        async def mock_dispatch(name, tool_input):
+        async def mock_dispatch(name, tool_input, preferences=None):
             return large_result
 
         async def capture_create(**kwargs):

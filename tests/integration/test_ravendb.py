@@ -10,8 +10,10 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
-from pyravendb.store.document_store import DocumentStore
+from ravendb import DocumentStore
 
+from src.db.client import doc_to_dict
+from src.db.geo import to_unit_vector
 from src.db.models import AirportDocument, Coordinates, RouteDocument, TypicalPrice
 from tests.conftest import TEST_DB
 
@@ -37,12 +39,18 @@ class TestRouteStoreAndLoad:
         assert loaded["hidden_city_via"] == "LHR"
 
     def test_store_and_load_airport(self, ravendb_session):
+        # A real location_vector is always populated at seed time (src/db/seed.py) —
+        # leaving it empty here would leave a malformed vector doc behind in the
+        # shared test database, which poisons RavenDB's auto vector-search index for
+        # every other test in this session (an empty vector exceeds the index's
+        # map-failure tolerance and marks it errored for the rest of the run).
         airport = AirportDocument(
             iata="WAW",
             name="Warsaw Chopin",
             city="Warsaw",
             country="PL",
             coordinates=Coordinates(lat=52.1657, lng=20.9671),
+            location_vector=to_unit_vector(52.1657, 20.9671),
         )
         ravendb_session.store(airport.model_dump(), airport.airport_id())
         ravendb_session.save_changes()
@@ -61,10 +69,10 @@ class TestRouteStoreAndLoad:
             ravendb_session.store(route.model_dump(), route.route_id())
         ravendb_session.save_changes()
 
-        results = list(
-            ravendb_session.query(collection_name="Routes")
-            .where_equals("origin", "WAW")
-        )
+        results = [
+            doc_to_dict(r)
+            for r in ravendb_session.query_collection("Routes").where_equals("origin", "WAW")
+        ]
         origins = {r["origin"] for r in results}
         assert origins == {"WAW"}
 
@@ -88,10 +96,12 @@ class TestRouteStoreAndLoad:
             ravendb_session.store(route.model_dump(), route.route_id())
         ravendb_session.save_changes()
 
-        candidates = list(
-            ravendb_session.query(collection_name="Routes")
-            .where_greater_than("hidden_city_score", 0.5)
-        )
+        candidates = [
+            doc_to_dict(r)
+            for r in ravendb_session.query_collection("Routes").where_greater_than(
+                "hidden_city_score", 0.5
+            )
+        ]
         assert all(r["hidden_city_score"] > 0.5 for r in candidates)
 
 
@@ -185,17 +195,150 @@ class TestSessionPersistence:
         with store1.open_session() as s:
             s.store(session_doc, doc_id)
             s.save_changes()
-        store1.dispose()
+        store1.close()
 
         # Read with store2 — simulates the replacement pod
         store2 = DocumentStore(urls=[ravendb_url], database=TEST_DB)
         store2.initialize()
         with store2.open_session() as s:
             loaded = s.load(doc_id)
-        store2.dispose()
+        store2.close()
 
         assert loaded is not None
         assert loaded["user_id"] == "u-persist"
         assert loaded["active_constraints"]["carry_on_only"] is True
         assert len(loaded["turns"]) == 2
         assert loaded["turns"][0]["content"] == "Find flights WAW→LHR"
+
+
+@pytest.mark.integration
+class TestVectorNearbySearch:
+    """Verifies the vector_search-based nearby-airport lookup against a live RavenDB."""
+
+    @pytest.mark.asyncio
+    async def test_nearby_ranks_same_region_above_distant_airport(self, ravendb_store):
+        airports = [
+            ("PEK", "Beijing", "CN", 40.0799, 116.6031),
+            ("PVG", "Shanghai", "CN", 31.1443, 121.8083),
+            ("CKG", "Chongqing", "CN", 29.7192, 106.6417),
+            ("ICN", "Seoul", "KR", 37.4602, 126.4407),
+            ("JFK", "New York", "US", 40.6413, -73.7781),
+        ]
+        with ravendb_store.open_session() as session:
+            for iata, city, country, lat, lng in airports:
+                doc = {
+                    "iata": iata,
+                    "name": city,
+                    "city": city,
+                    "country": country,
+                    "coordinates": {"lat": lat, "lng": lng},
+                    "location_vector": to_unit_vector(lat, lng),
+                }
+                session.store(doc, f"airports/{iata}")
+                session.advanced.get_metadata_for(doc)["@collection"] = "Airports"
+            session.save_changes()
+
+        from src.tools.search_routes import _nearby_alternatives
+
+        with patch("src.tools.search_routes.get_store", return_value=ravendb_store):
+            results = _nearby_alternatives(ravendb_store, "PEK")
+
+        # _nearby_alternatives returns the full ranked pool now (no distance floor,
+        # no truncation) — the caller in search_routes() filters by route
+        # availability and truncates to the top 3. So JFK legitimately appears
+        # here too; what matters is that same-region airports rank above it.
+        codes_in_order = [r["airport"] for r in results]
+        assert "PVG" in codes_in_order
+        assert "CKG" in codes_in_order
+        assert "JFK" in codes_in_order
+        assert codes_in_order.index("PVG") < codes_in_order.index("JFK")
+        assert codes_in_order.index("CKG") < codes_in_order.index("JFK")
+
+
+@pytest.mark.integration
+class TestHasRouteToward:
+    """Verifies the reachability filter that keeps nearby-airport suggestions from
+    being dead ends: a geographically close airport with zero cached routes
+    toward the destination (or its country) must not be suggested."""
+
+    @pytest.mark.asyncio
+    async def test_excludes_candidate_with_no_route_toward_destination(self, ravendb_store):
+        airports = [
+            ("ZNR", "Nearby-With-Route", "PL", 52.0, 21.0),
+            ("ZND", "Nearby-No-Route", "PL", 52.5, 20.5),
+        ]
+        with ravendb_store.open_session() as session:
+            for iata, city, country, lat, lng in airports:
+                doc = {
+                    "iata": iata,
+                    "name": city,
+                    "city": city,
+                    "country": country,
+                    "coordinates": {"lat": lat, "lng": lng},
+                    "location_vector": to_unit_vector(lat, lng),
+                }
+                session.store(doc, f"airports/{iata}")
+                session.advanced.get_metadata_for(doc)["@collection"] = "Airports"
+            has_route = {
+                "origin": "ZNR",
+                "destination": "ZTGT",
+                "hubs": [],
+                "typical_price": {"min": 50.0, "max": 80.0, "currency": "USD"},
+                "duration_avg_min": 0,
+                "hidden_city_score": 0.0,
+                "hidden_city_risks": [],
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+            }
+            session.store(has_route, "routes/ZNR-ZTGT")
+            session.advanced.get_metadata_for(has_route)["@collection"] = "Routes"
+            session.save_changes()
+
+        from src.tools.search_routes import _has_route_toward
+
+        assert _has_route_toward(ravendb_store, "ZNR", "ZTGT", None) is True
+        assert _has_route_toward(ravendb_store, "ZND", "ZTGT", None) is False
+
+
+@pytest.mark.integration
+class TestConnectingHubSearch:
+    """Verifies the origin->hub->destination fallback against a live RavenDB."""
+
+    @pytest.mark.asyncio
+    async def test_connecting_hub_found_when_no_direct_route(self, ravendb_store):
+        now = datetime.now(timezone.utc).isoformat()
+        leg1 = {
+            "origin": "AAA",
+            "destination": "HUB",
+            "hubs": [],
+            "typical_price": {"min": 100.0, "max": 150.0, "currency": "USD"},
+            "duration_avg_min": 0,
+            "hidden_city_score": 0.0,
+            "hidden_city_risks": [],
+            "last_updated": now,
+        }
+        leg2 = {
+            "origin": "HUB",
+            "destination": "BBB",
+            "hubs": [],
+            "typical_price": {"min": 80.0, "max": 120.0, "currency": "USD"},
+            "duration_avg_min": 0,
+            "hidden_city_score": 0.0,
+            "hidden_city_risks": [],
+            "last_updated": now,
+        }
+        with ravendb_store.open_session() as session:
+            session.store(leg1, "routes/AAA-HUB")
+            session.advanced.get_metadata_for(leg1)["@collection"] = "Routes"
+            session.store(leg2, "routes/HUB-BBB")
+            session.advanced.get_metadata_for(leg2)["@collection"] = "Routes"
+            session.save_changes()
+
+        from src.tools.search_routes import search_routes
+
+        with patch("src.tools.search_routes.get_store", return_value=ravendb_store):
+            result = await search_routes(origin="AAA", destination="BBB")
+
+        assert result["count"] == 0
+        assert "connecting_hubs" in result
+        assert result["connecting_hubs"][0]["via"] == "HUB"
+        assert result["connecting_hubs"][0]["total_price_usd_min"] == pytest.approx(180.0)

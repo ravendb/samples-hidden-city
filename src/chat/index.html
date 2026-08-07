@@ -105,6 +105,18 @@
   .tool-indicator::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--accent2); display: inline-block; animation: pulse 1s infinite; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
 
+  /* Quick prompts */
+  #quick-prompts {
+    display: flex; flex-wrap: wrap; gap: 8px;
+    padding: 0 16px 12px;
+  }
+  .quick-prompt-btn {
+    background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 999px; padding: 7px 14px; font-size: 0.78rem; cursor: pointer;
+    font-family: var(--font); transition: border-color 0.15s, background 0.15s;
+  }
+  .quick-prompt-btn:hover { border-color: var(--accent); background: var(--surface); }
+
   /* Input */
   #input-area {
     display: flex; gap: 8px; padding: 10px 16px;
@@ -230,10 +242,15 @@
     <div id="messages">
       <div class="msg assistant">
         <div class="bubble">
-          <p>Welcome! I can find flights and detect hidden city opportunities where booking a connecting route is cheaper than flying direct.</p>
+          <p>Welcome! I can find flights and detect hidden city opportunities where booking a connecting route is cheaper than flying direct. If your route isn't cached, I can also suggest nearby airports (~300 km) that might get you a better price.</p>
           <p>Tell me a bit about what you're into — routes or countries you're watching (e.g. <em>China</em>), where you usually fly from, your budget, and whether carry-on only works for you. I'll remember it for next time.</p>
         </div>
       </div>
+    </div>
+    <div id="quick-prompts">
+      <button class="quick-prompt-btn" data-quick="anywhere">✈ Anywhere from home</button>
+      <button class="quick-prompt-btn" data-quick="specific">📍 Search a specific route</button>
+      <button class="quick-prompt-btn" id="quick-profile-btn">📝 Fill in my profile</button>
     </div>
     <div id="input-area">
       <textarea id="user-input" placeholder="Ask about flights..." rows="1"></textarea>
@@ -519,6 +536,29 @@ refreshProfile();
 const messagesEl = document.getElementById('messages');
 const inputEl = document.getElementById('user-input');
 const sendBtn = document.getElementById('send-btn');
+const quickPromptsEl = document.getElementById('quick-prompts');
+
+function hideQuickPrompts() {
+  quickPromptsEl.style.display = 'none';
+}
+
+quickPromptsEl.addEventListener('click', e => {
+  const btn = e.target.closest('.quick-prompt-btn');
+  if (!btn) return;
+
+  if (btn.dataset.quick === 'anywhere') {
+    inputEl.value = 'Find me flights anywhere from my home airport.';
+    sendMessage();
+  } else if (btn.dataset.quick === 'specific') {
+    inputEl.value = 'Find flights from  to ';
+    inputEl.focus();
+    inputEl.selectionStart = inputEl.selectionEnd = 18; // right after "from "
+  }
+});
+
+document.getElementById('quick-profile-btn').addEventListener('click', () => {
+  window.location.href = '/profile';
+});
 
 function scrollBottom() {
   messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -552,6 +592,7 @@ async function sendMessage() {
   const text = inputEl.value.trim();
   if (!text) return;
 
+  hideQuickPrompts();
   inputEl.value = '';
   inputEl.style.height = 'auto';
   sendBtn.disabled = true;
