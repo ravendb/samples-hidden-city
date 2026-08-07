@@ -1,0 +1,62 @@
+name: k8s-pinned
+
+# Blocking infra smoke test against the versions pinned in versions.env
+# (repo root). Brings up the full local-kind stack via k8s/start-k8s.sh --
+# kind cluster, Calico, cert-manager, ingress-nginx, RavenDB Operator, RavenDB
+# cluster -- and asserts it reaches Ready. Infra-only: no OPENAI_API_KEY is
+# required, the agent's own /health is not exercised here.
+#
+# See .github/workflows/k8s-nightly.yml for the non-blocking counterpart that
+# tests against each dependency's latest release instead of the pinned ones.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - versions.env
+      - k8s/**
+      - Dockerfile
+      - docker-compose.yml
+      - .github/workflows/k8s-pinned.yml
+  pull_request:
+    paths:
+      - versions.env
+      - k8s/**
+      - Dockerfile
+      - docker-compose.yml
+      - .github/workflows/k8s-pinned.yml
+  workflow_dispatch: {}
+
+jobs:
+  smoke-test:
+    name: Infra smoke test (pinned versions)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Infra-only smoke test -- no real key needed, the agent's own /health
+      # (which does need OPENAI_API_KEY) is not exercised by this job.
+      OPENAI_API_KEY: sk-ci-placeholder-not-a-real-key
+      TRAVELPAYOUTS_TOKEN: ci-placeholder
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Write RavenDB license
+        env:
+          RAVENDB_LICENSE: ${{ secrets.RAVENDB_LICENSE }}
+        run: printf '%s' "$RAVENDB_LICENSE" > license.json
+
+      - name: Run k8s/start-k8s.sh (pinned versions.env)
+        run: bash k8s/start-k8s.sh --no-wait
+
+      - name: Cluster state (on failure)
+        if: failure()
+        run: |
+          kubectl get pods -A || true
+          kubectl describe ravendbcluster ravendb-cluster -n hidden-city || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -100 || true
+
+      - name: Delete kind cluster
+        if: always()
+        run: kind delete cluster --name hidden-city || true

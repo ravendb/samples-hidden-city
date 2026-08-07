@@ -12,6 +12,17 @@
 #   - Docker daemon running (unless --skip-build)
 set -euo pipefail
 
+# versions.env is the single source of truth (repo root). Capture any
+# explicitly pre-exported override BEFORE sourcing -- `source` unconditionally
+# reassigns, so it would otherwise clobber a caller's override with the file's
+# default.
+_user_ravendb_cluster_chart_version="${RAVENDB_CLUSTER_CHART_VERSION:-}"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+set -a
+source "${VERSIONS_FILE:-$root/versions.env}"
+set +a
+RAVENDB_CLUSTER_CHART_VERSION="${_user_ravendb_cluster_chart_version:-$RAVENDB_CLUSTER_CHART_VERSION}"
+
 SKIP_OPERATOR=false
 SKIP_BUILD=false
 IMAGE_TAG="${IMAGE_TAG:-hidden-city:latest}"
@@ -73,7 +84,8 @@ step "Installing RavenDB cluster  (helm upgrade --install ravendb-cluster ...)"
 echo "    Requires the license/cert secrets referenced by k8s/ravendb/values.yaml"
 echo "    to already exist in namespace '$NS' — see k8s/operator/install.sh."
 helm upgrade --install ravendb-cluster ravendb-operator/ravendb-cluster \
-  -n "$NS" --create-namespace -f k8s/ravendb/values.yaml
+  -n "$NS" --create-namespace -f k8s/ravendb/values.yaml \
+  --version "$RAVENDB_CLUSTER_CHART_VERSION"
 ok "RavenDB cluster chart applied"
 
 # ── step 5: full kustomize apply (rest of the app) ────────────────────────────

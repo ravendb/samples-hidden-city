@@ -23,6 +23,10 @@ param(
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 
+Write-Host ""
+Write-Host "  Make sure Docker Desktop is running before continuing (both Local's" -ForegroundColor Yellow
+Write-Host "  docker-compose and Kubernetes mode's kind cluster run as Docker containers)." -ForegroundColor Yellow
+
 # --- k8s cluster teardown shortcut (no mode picker needed) ---
 if ($DeleteCluster) {
     & "$root\start-k8s.ps1" -DeleteCluster -ClusterName $ClusterName
@@ -60,13 +64,21 @@ function Write-Warn($msg) {
     Write-Host "  WARN: $msg" -ForegroundColor Yellow
 }
 
+# UV_VERSION from versions.env (repo root, single source of truth -- see its
+# header comment). Falls back to $null (unpinned) only if the file is missing,
+# so this script keeps working during initial checkout/bootstrap edge cases.
+$UvVersion = (Get-Content "$root\versions.env" -ErrorAction SilentlyContinue |
+    Where-Object { $_ -match '^\s*UV_VERSION\s*=\s*(\S+)' } |
+    ForEach-Object { $Matches[1] } | Select-Object -First 1)
+
 function Find-Uv {
     $found = Get-Command uv -ErrorAction SilentlyContinue
     if ($found) { return $found.Source }
     $candidates = @(
         "$env:LOCALAPPDATA\uv\uv.exe",
         "$env:USERPROFILE\.local\bin\uv.exe",
-        "$env:USERPROFILE\.cargo\bin\uv.exe"
+        "$env:USERPROFILE\.cargo\bin\uv.exe",
+        "$env:LOCALAPPDATA\uv-pinned\$UvVersion\uv.exe"
     )
     foreach ($c in $candidates) {
         if (Test-Path $c) { return $c }
@@ -75,20 +87,38 @@ function Find-Uv {
 }
 
 function Install-Uv {
-    Write-Warn "uv not found -- installing automatically..."
+    Write-Warn "uv not found -- installing automatically ($UvVersion)..."
     $winget = Get-Command winget -ErrorAction SilentlyContinue
-    if ($winget) {
-        winget install --id astral-sh.uv -e --silent --accept-package-agreements --accept-source-agreements
-    } else {
-        Write-Host "  winget not available, falling back to the official install script..." -ForegroundColor Gray
-        Invoke-Expression (Invoke-RestMethod -Uri "https://astral.sh/uv/install.ps1")
+    if ($winget -and $UvVersion) {
+        winget install --id astral-sh.uv -e --version $UvVersion --silent --accept-package-agreements --accept-source-agreements
     }
     $uv = Find-Uv
+    if ($uv -and $UvVersion) {
+        $actual = & $uv --version 2>&1
+        if ($actual -notmatch [regex]::Escape($UvVersion)) {
+            Write-Warn "winget installed uv but not at the pinned version $UvVersion (got: $actual)"
+            $uv = $null
+        }
+    }
+    if (-not $uv) {
+        # winget unavailable, or it didn't produce the exact pinned version --
+        # download that release's own asset directly rather than falling back
+        # to the "always latest" install.ps1 (the same unpinned-installer
+        # pattern this whole effort exists to remove).
+        Write-Host "  Downloading uv $UvVersion directly from GitHub releases..." -ForegroundColor Gray
+        $dest = "$env:LOCALAPPDATA\uv-pinned\$UvVersion"
+        New-Item -ItemType Directory -Force -Path $dest | Out-Null
+        $zipPath = "$dest\uv.zip"
+        Invoke-WebRequest -Uri "https://github.com/astral-sh/uv/releases/download/$UvVersion/uv-x86_64-pc-windows-msvc.zip" -OutFile $zipPath
+        Expand-Archive -Path $zipPath -DestinationPath $dest -Force
+        Remove-Item $zipPath -Force
+        $uv = Find-Uv
+    }
     if (-not $uv) {
         Write-Error "uv installation finished but the executable could not be located. Reopen this terminal and try again."
         exit 1
     }
-    Write-Ok "uv installed"
+    Write-Ok "uv installed ($(& $uv --version 2>&1))"
     return $uv
 }
 

@@ -5,8 +5,20 @@
 # Run once per cluster. Safe to re-run (helm upgrade --install is idempotent).
 set -euo pipefail
 
-CERT_MANAGER_VERSION="${CERT_MANAGER_VERSION:-v1.16.2}"
-OPERATOR_CHART_VERSION="${OPERATOR_CHART_VERSION:-}"  # empty = latest published chart
+# versions.env is the single source of truth (repo root). Capture any
+# explicitly pre-exported override BEFORE sourcing -- `source` unconditionally
+# reassigns, so it would otherwise clobber a caller's override with the file's
+# default.
+_user_cert_manager_version="${CERT_MANAGER_VERSION:-}"
+_user_operator_chart_version="${OPERATOR_CHART_VERSION:-}"
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+set -a
+source "${VERSIONS_FILE:-$root/versions.env}"
+set +a
+
+CERT_MANAGER_VERSION="${_user_cert_manager_version:-$CERT_MANAGER_VERSION}"
+OPERATOR_CHART_VERSION="${_user_operator_chart_version:-$RAVENDB_OPERATOR_CHART_VERSION}"
 
 echo "==> Installing cert-manager (${CERT_MANAGER_VERSION})..."
 kubectl apply -f "https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.yaml"

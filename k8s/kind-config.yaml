@@ -6,8 +6,11 @@ name: hidden-city
 # needs exactly that (AssertServerCanContactItselfWhenAuthIsOn on startup).
 # Calico is installed instead (see k8s/operator/install.sh) since it handles
 # hairpin/loopback traffic correctly.
+# Node image pinned to match KIND_NODE_IMAGE in versions.env (source of truth) --
+# preflight asserts the two agree. Bump both together, never just one.
 networking:
   disableDefaultCNI: true
   podSubnet: 192.168.0.0/16
 nodes:
 - role: control-plane
+  image: kindest/node:v1.36.1@sha256:3489c7674813ba5d8b1a9977baea8a6e553784dab7b84759d1014dbd78f7ebd5

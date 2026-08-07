@@ -6,10 +6,16 @@
 #   .\start-k8s.ps1 -SkipOperator    # skip cert-manager/ingress-nginx/operator install (already installed)
 #   .\start-k8s.ps1 -DeleteCluster   # delete the kind cluster and exit
 #
-# Prerequisites: kind, kubectl, helm, openssl are auto-installed via winget if missing.
+# Prerequisites: kind, kubectl, helm are fetched deterministically into .tools/
+# (see Get-ToolBinary) -- no admin rights, no PATH mutation, exact versions pinned
+# in versions.env. openssl is still installed via winget (FireDaemon.OpenSSL).
 # Docker Desktop is also auto-installed via winget, but needs one manual step
 # (first launch: accept the license, finish WSL2/Hyper-V setup, possibly reboot) --
 # the script installs it and asks you to re-run once it's running.
+#
+# Every tool/image/manifest version this script touches is pinned in
+# versions.env at the repo root -- see that file's header comment. Never inline
+# a version or a moving branch ref (master/main/latest) directly in this script.
 #
 # Everything the deploy needs -- OpenAI/Travelpayouts/license values and the
 # RavenDB TLS cert chain -- is collected or generated FIRST, before the kind
@@ -28,8 +34,23 @@ $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 $NS = "hidden-city"
 $ImageTag = "hidden-city:latest"
-$CertManagerVersion = "v1.16.2"
-$IngressNginxUrl = "https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml"
+
+# Parses versions.env's plain `KEY=value` lines (blank/`#`-comment lines and
+# trailing ` # inline comments` skipped) into a hashtable. The single source of
+# truth for every pinned version below -- see versions.env's header comment.
+function Read-VersionsEnv([string]$Path) {
+    $table = @{}
+    foreach ($line in Get-Content $Path) {
+        if ($line -notmatch '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$') { continue }
+        $value = ($Matches[2] -replace '\s+#.*$', '').Trim()
+        $table[$Matches[1]] = $value
+    }
+    return $table
+}
+$Versions = Read-VersionsEnv "$root\versions.env"
+
+$CertManagerVersion = $Versions.CERT_MANAGER_VERSION
+$IngressNginxUrl = "https://raw.githubusercontent.com/kubernetes/ingress-nginx/$($Versions.INGRESS_NGINX_VERSION)/deploy/static/provider/kind/deploy.yaml"
 
 function Write-Step($n, $total, $msg) {
     Write-Host "`n[$n/$total] $msg" -ForegroundColor Cyan
@@ -119,6 +140,48 @@ function Ensure-CliTool($cmd, $wingetId, $displayName) {
     return $false
 }
 
+# Downloads one specific version of a tool straight from the project's own
+# release URL into .tools/<Name>/<Version>/, skipping the download if that exact
+# versioned path is already cached (still deterministic -- the path is
+# version-qualified, so bumping versions.env naturally invalidates the cache).
+# Returns the containing directory; callers prepend it to $env:Path for this
+# process only. No admin rights, no permanent PATH mutation, and no risk of a
+# second install shadowing it -- unlike winget-installed FireDaemon OpenSSL
+# above, which is why openssl stays on the winget path instead of this one (it
+# ships as an installer, not a single downloadable binary/zip).
+function Get-ToolBinary {
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Version,
+        [Parameter(Mandatory)][string]$Url,
+        [Parameter(Mandatory)][string]$ExeName,
+        [string]$ZipEntry = $null
+    )
+    $dir = "$root\.tools\$Name\$Version"
+    $exePath = "$dir\$ExeName"
+    if (Test-Path $exePath) { return $dir }
+
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    Write-Host "  Fetching $Name $Version..." -ForegroundColor Gray
+
+    if ($ZipEntry) {
+        $zipPath = "$dir\download.zip"
+        Invoke-WebRequest -Uri $Url -OutFile $zipPath
+        Expand-Archive -Path $zipPath -DestinationPath $dir -Force
+        Move-Item -Force "$dir\$ZipEntry" $exePath
+        Remove-Item $zipPath -Force
+        Get-ChildItem $dir -Directory | Remove-Item -Recurse -Force
+    } else {
+        Invoke-WebRequest -Uri $Url -OutFile $exePath
+    }
+
+    if (-not (Test-Path $exePath)) {
+        Write-Host "  ERROR: failed to fetch $Name $Version from $Url" -ForegroundColor Red
+        exit 1
+    }
+    return $dir
+}
+
 # FireDaemon's installer places files under a version-suffixed folder name
 # (e.g. "FireDaemon OpenSSL 3", "FireDaemon OpenSSL 4") -- there is no plain
 # "OpenSSL" folder -- and per the winget package's own tracked issue
@@ -154,6 +217,103 @@ function Get-RavenNodeTags {
         ForEach-Object { $Matches[1] }
 }
 
+# Runs every check up front and reports a full pass/fail table, instead of
+# failing one check at a time minutes into a `kind create cluster` run. Two
+# kinds of check: machine state (Python/Docker/ports) and cross-file literal
+# pin consistency (Dockerfile/docker-compose.yml/values.yaml/kind-config.yaml
+# vs versions.env -- see versions.env's header comment for why these can't
+# just be templated from one source).
+function Invoke-Preflight {
+    $checks = @()
+
+    $pyproject = Get-Content "$root\pyproject.toml" -Raw
+    $reqMatch = [regex]::Match($pyproject, 'requires-python\s*=\s*"([^"]+)"')
+    $pyCmd = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $pyCmd) { $pyCmd = Get-Command python3 -ErrorAction SilentlyContinue }
+    if (-not $pyCmd) {
+        $checks += @{ Ok = $false; Msg = "python/python3 not found on PATH" }
+    } else {
+        $verOut = & $pyCmd.Source --version 2>&1
+        $verMatch = [regex]::Match("$verOut", '(\d+)\.(\d+)\.(\d+)')
+        if ($verMatch.Success -and $reqMatch.Success) {
+            $maj = [int]$verMatch.Groups[1].Value; $min = [int]$verMatch.Groups[2].Value
+            # requires-python = ">=3.11,<3.14" -- simple major.minor bound check
+            $ok = ($maj -eq 3 -and $min -ge 11 -and $min -lt 14)
+            $checks += @{ Ok = $ok; Msg = "Python $($verMatch.Value) satisfies pyproject.toml requires-python ($($reqMatch.Groups[1].Value))" }
+        } else {
+            $checks += @{ Ok = $false; Msg = "Could not parse python --version output or pyproject.toml's requires-python" }
+        }
+    }
+
+    # Docker daemon/memory: soft-checked here (installing Docker Desktop, if
+    # missing, happens later in the script) -- the hard, fatal check is still
+    # the existing one further down once Docker is guaranteed installed.
+    if (Get-Command docker -ErrorAction SilentlyContinue) {
+        $memBytes = Invoke-Quiet { docker info --format '{{.MemTotal}}' 2>$null }
+        if ($LASTEXITCODE -ne 0 -or -not $memBytes) {
+            $checks += @{ Ok = $true; Msg = "Docker daemon not responding yet -- checked again below" }
+        } else {
+            $memGiB = [math]::Round([int64]$memBytes / 1GB, 1)
+            if ($memGiB -lt 2) {
+                $checks += @{ Ok = $false; Msg = "Docker memory ${memGiB}GiB is below the ~2GiB minimum for kind + Calico + RavenDB" }
+            } else {
+                if ($memGiB -lt 4) { Write-Warn "Docker memory ${memGiB}GiB is below the recommended 4GiB+ -- may be tight" }
+                $checks += @{ Ok = $true; Msg = "Docker memory: ${memGiB}GiB" }
+            }
+        }
+    } else {
+        $checks += @{ Ok = $true; Msg = "docker not yet installed -- installed below" }
+    }
+
+    # Ports this script's own port-forwards bind to at the end of a run.
+    foreach ($port in @(8000, 8081)) {
+        $inUse = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue
+        $msg = "Port $port free"
+        if ($inUse) { $msg = "Port $port already in use" }
+        $checks += @{ Ok = (-not $inUse); Msg = $msg }
+    }
+
+    $dockerfile = Get-Content "$root\Dockerfile" -Raw
+    $fromMatch = [regex]::Match($dockerfile, 'FROM python:([\w.\-]+)')
+    $checks += @{
+        Ok  = ($fromMatch.Success -and $fromMatch.Groups[1].Value -eq $Versions.PYTHON_IMAGE_TAG)
+        Msg = "Dockerfile FROM python:$($fromMatch.Groups[1].Value) matches versions.env PYTHON_IMAGE_TAG=$($Versions.PYTHON_IMAGE_TAG)"
+    }
+    $uvMatch = [regex]::Match($dockerfile, 'uv==([\d.]+)')
+    $checks += @{
+        Ok  = ($uvMatch.Success -and $uvMatch.Groups[1].Value -eq $Versions.UV_VERSION)
+        Msg = "Dockerfile uv==$($uvMatch.Groups[1].Value) matches versions.env UV_VERSION=$($Versions.UV_VERSION)"
+    }
+
+    $composeMatch = [regex]::Match((Get-Content "$root\docker-compose.yml" -Raw), 'image:\s*ravendb/ravendb:([\w.\-]+)')
+    $valuesMatch = [regex]::Match((Get-Content "$root\k8s\ravendb\values.yaml" -Raw), 'image:\s*ravendb/ravendb:([\w.\-]+)')
+    $ravenOk = $composeMatch.Success -and $valuesMatch.Success `
+        -and $composeMatch.Groups[1].Value -eq $Versions.RAVENDB_IMAGE_TAG `
+        -and $valuesMatch.Groups[1].Value -eq $Versions.RAVENDB_IMAGE_TAG
+    $checks += @{
+        Ok  = $ravenOk
+        Msg = "RavenDB image tag agrees: docker-compose.yml=$($composeMatch.Groups[1].Value) values.yaml=$($valuesMatch.Groups[1].Value) versions.env=$($Versions.RAVENDB_IMAGE_TAG)"
+    }
+
+    $kindImgMatch = [regex]::Match((Get-Content "$root\k8s\kind-config.yaml" -Raw), 'image:\s*(\S+)')
+    $checks += @{
+        Ok  = ($kindImgMatch.Success -and $kindImgMatch.Groups[1].Value -eq $Versions.KIND_NODE_IMAGE)
+        Msg = "k8s/kind-config.yaml node image matches versions.env KIND_NODE_IMAGE"
+    }
+
+    Write-Host "`n  Preflight:" -ForegroundColor Cyan
+    $failed = $false
+    foreach ($c in $checks) {
+        if ($c.Ok) { Write-Host "    OK    $($c.Msg)" -ForegroundColor Green }
+        else { Write-Host "    FAIL  $($c.Msg)" -ForegroundColor Red; $failed = $true }
+    }
+    Write-Host ""
+    if ($failed) {
+        Write-Host "  ERROR: preflight failed -- fix the above before continuing." -ForegroundColor Red
+        exit 1
+    }
+}
+
 # Generates a local self-signed CA + server + client certificate chain for
 # RavenDB's TLS requirement, writing it into k8s/ravendb/certs/. Skipped
 # entirely if a chain is already present there -- these files are gitignored
@@ -174,25 +334,23 @@ function Get-RavenNodeTags {
 function Ensure-RavenDbCerts {
     param([string]$CertsDir, [string[]]$NodeTags)
 
-    $required = @("ca.crt", "server.pfx", "client.pfx")
+    $required = @("ca.crt", "server.crt", "server.pfx", "client.pfx")
     $allPresent = $true
     foreach ($f in $required) {
         if (-not (Test-Path "$CertsDir\$f")) { $allPresent = $false; break }
-    }
-    if ($allPresent) {
-        Write-Ok "RavenDB TLS certs already present in k8s/ravendb/certs -- reusing"
-        return
     }
 
     # Not routed through Ensure-CliTool: that helper's "already installed?"
     # check is Get-Command-based, which is unreliable for this package in
     # both directions -- see Resolve-OpenSslExe above. Resolve directly, only
     # falling back to a winget install if genuinely not found anywhere.
+    # Resolved unconditionally (even on the reuse path below) since the SAN
+    # validation on an already-present chain also needs it.
     $openssl = Resolve-OpenSslExe
     if (-not $openssl) {
         if (Get-Command winget -ErrorAction SilentlyContinue) {
-            Write-Warn "OpenSSL not found -- installing via winget (FireDaemon.OpenSSL)..."
-            winget install -e --id FireDaemon.OpenSSL --accept-package-agreements --accept-source-agreements
+            Write-Warn "OpenSSL not found -- installing via winget (FireDaemon.OpenSSL $($Versions.OPENSSL_VERSION))..."
+            winget install -e --id FireDaemon.OpenSSL --version $Versions.OPENSSL_VERSION --accept-package-agreements --accept-source-agreements
             $openssl = Resolve-OpenSslExe
         } else {
             Write-Host "  ERROR: openssl not found and winget isn't available to install it." -ForegroundColor Red
@@ -202,6 +360,39 @@ function Ensure-RavenDbCerts {
     if (-not $openssl) {
         Write-Host "  ERROR: openssl is required to generate RavenDB TLS certs and could not be located" -ForegroundColor Red
         Write-Host "    (checked Program Files\FireDaemon OpenSSL*\bin and PATH)." -ForegroundColor Gray
+        exit 1
+    }
+
+    if ($allPresent) {
+        # Otherwise the chain would be reused forever as long as the files
+        # exist, even after values.yaml's active node tags change to include
+        # one the cert never covered (e.g. uncommenting b/c) -- catch that
+        # here with a clear message instead of a confusing TLS handshake
+        # failure deep inside RavenDB's own
+        # AssertServerCanContactItselfWhenAuthIsOn startup check.
+        #
+        # Subset check, not exact match: the cert covering MORE than the
+        # currently active tags is harmless (e.g. it was generated for a/b/c
+        # and values.yaml later scaled down to just a for a license limit --
+        # RavenDB doesn't care about unused SAN entries). Only a MISSING SAN
+        # for a currently active tag is the actual risk.
+        $expectedSans = ($NodeTags | ForEach-Object { "DNS:$_.hiddencity.local", "DNS:$_-tcp.hiddencity.local" }) | Sort-Object
+        $sanOutput = & $openssl x509 -in "$CertsDir\server.crt" -noout -ext subjectAltName 2>$null
+        $actualSans = [regex]::Matches(($sanOutput -join " "), '(DNS|IP Address):[^\s,]+') |
+            ForEach-Object { $_.Value } | Sort-Object
+
+        $missingSans = @($expectedSans | Where-Object { $actualSans -notcontains $_ })
+        if ($actualSans.Count -gt 0 -and $missingSans.Count -eq 0) {
+            Write-Ok "RavenDB TLS certs already present in k8s/ravendb/certs -- reusing"
+            return
+        }
+
+        Write-Host "  ERROR: k8s/ravendb/certs/server.crt is missing SANs for the current node tags." -ForegroundColor Red
+        Write-Host "    Missing: $($missingSans -join ', ')" -ForegroundColor Gray
+        Write-Host "    Cert covers: $($actualSans -join ', ')" -ForegroundColor Gray
+        Write-Host "    Fix: delete k8s/ravendb/certs and re-run to regenerate for the current node tags." -ForegroundColor Gray
+        Write-Host "    If a cluster is already bootstrapped, adding nodes needs the operator's manual" -ForegroundColor Gray
+        Write-Host "    topology-change procedure -- regenerating local cert files alone won't add them." -ForegroundColor Gray
         exit 1
     }
 
@@ -292,6 +483,10 @@ extendedKeyUsage = clientAuth
     Write-Ok "RavenDB TLS chain generated"
 }
 
+Write-Host ""
+Write-Host "  Make sure Docker Desktop is running before continuing (kind, the RavenDB" -ForegroundColor Yellow
+Write-Host "  cluster, and the app image all run as Docker containers)." -ForegroundColor Yellow
+
 # --- delete cluster shortcut ---
 if ($DeleteCluster) {
     Write-Host "`nDeleting kind cluster '$ClusterName'..." -ForegroundColor Cyan
@@ -300,16 +495,27 @@ if ($DeleteCluster) {
     exit 0
 }
 
-# --- prerequisites (auto-install missing CLI tools via winget) ---
+# --- preflight: fail in seconds, not eight minutes into `kind create cluster` ---
+Invoke-Preflight
+
+# --- prerequisites: kind/kubectl/helm fetched deterministically into .tools/ ---
+# Not winget: exact pinned versions (versions.env), no admin rights, no PATH
+# mutation beyond this process, and immune to the class of cross-installer PATH
+# conflict that broke openssl's -legacy provider earlier in this script (see
+# Resolve-OpenSslExe). Prepending the fetched dirs to $env:Path for this process
+# only means every bare `kind`/`kubectl`/`helm` call below the rest of this
+# script already uses resolves to the exact pinned binary.
 Write-Host ""
-$cliReady = $true
-foreach ($t in @(
-    @{ Cmd = "kind";    Id = "Kubernetes.kind";    Name = "kind" },
-    @{ Cmd = "kubectl"; Id = "Kubernetes.kubectl"; Name = "kubectl" },
-    @{ Cmd = "helm";    Id = "Helm.Helm";          Name = "helm" }
-)) {
-    if (-not (Ensure-CliTool $t.Cmd $t.Id $t.Name)) { $cliReady = $false }
-}
+$toolsArch = "amd64"
+$kindDir = Get-ToolBinary -Name "kind" -Version $Versions.KIND_VERSION -ExeName "kind.exe" `
+    -Url "https://kind.sigs.k8s.io/dl/$($Versions.KIND_VERSION)/kind-windows-$toolsArch"
+$kubectlDir = Get-ToolBinary -Name "kubectl" -Version $Versions.KUBECTL_VERSION -ExeName "kubectl.exe" `
+    -Url "https://dl.k8s.io/release/$($Versions.KUBECTL_VERSION)/bin/windows/$toolsArch/kubectl.exe"
+$helmDir = Get-ToolBinary -Name "helm" -Version $Versions.HELM_VERSION -ExeName "helm.exe" `
+    -Url "https://get.helm.sh/helm-$($Versions.HELM_VERSION)-windows-$toolsArch.zip" `
+    -ZipEntry "windows-$toolsArch\helm.exe"
+$env:Path = "$kindDir;$kubectlDir;$helmDir;$env:Path"
+Write-Ok "kind $($Versions.KIND_VERSION), kubectl $($Versions.KUBECTL_VERSION), helm $($Versions.HELM_VERSION) ready (.tools/)"
 
 # Docker Desktop is a heavier install (WSL2/Hyper-V, admin rights, a GUI first-run
 # to accept the license and pick a backend) -- winget can kick it off, but it
@@ -339,13 +545,7 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-if (-not $cliReady) {
-    Write-Host ""
-    Write-Warn "One or more tools were just installed but aren't on PATH in this terminal yet."
-    Write-Warn "Close and reopen your terminal, then re-run: .\start-k8s.ps1"
-    exit 1
-}
-Write-Ok "kind, kubectl, helm, docker found"
+Write-Ok "docker found"
 
 $totalSteps = 10
 if ($SkipBuild)    { $totalSteps-- }
@@ -451,7 +651,7 @@ kubectl config use-context "kind-$ClusterName" | Out-Null
 # apply) since the CRDs are large; safe to skip if already installed.
 Write-Host "  Installing Calico CNI (via Tigera Operator)..." -ForegroundColor Gray
 Invoke-Quiet {
-    kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/master/manifests/tigera-operator.yaml 2>$null
+    kubectl create -f "https://raw.githubusercontent.com/projectcalico/calico/$($Versions.CALICO_VERSION)/manifests/tigera-operator.yaml" 2>$null
 } | Out-Null
 kubectl -n tigera-operator rollout status deployment/tigera-operator --timeout=90s
 
@@ -575,7 +775,8 @@ if (-not $SkipOperator) {
 
     Write-Host "  Installing RavenDB Kubernetes Operator..." -ForegroundColor Gray
     helm upgrade --install ravendb-operator ravendb-operator/ravendb-operator `
-        -n ravendb-operator-system --create-namespace
+        -n ravendb-operator-system --create-namespace `
+        --version $($Versions.RAVENDB_OPERATOR_CHART_VERSION)
     if ($LASTEXITCODE -ne 0) { Write-Host "  ERROR: helm install of ravendb-operator failed." -ForegroundColor Red; exit 1 }
     kubectl rollout status deployment -n ravendb-operator-system -l app.kubernetes.io/name=ravendb-operator --timeout=120s
     if ($LASTEXITCODE -ne 0) { Write-Host "  ERROR: ravendb-operator deployment did not roll out in time." -ForegroundColor Red; exit 1 }
@@ -588,7 +789,8 @@ if (-not $SkipOperator) {
 $step++
 Write-Step $step $totalSteps "Installing RavenDB cluster  (helm upgrade --install ravendb-cluster ...)"
 helm upgrade --install ravendb-cluster ravendb-operator/ravendb-cluster `
-    -n $NS --create-namespace -f "$root\k8s\ravendb\values.yaml"
+    -n $NS --create-namespace -f "$root\k8s\ravendb\values.yaml" `
+    --version $($Versions.RAVENDB_CLUSTER_CHART_VERSION)
 if ($LASTEXITCODE -ne 0) { Write-Host "  ERROR: helm install of ravendb-cluster failed." -ForegroundColor Red; exit 1 }
 Write-Ok "RavenDB cluster chart applied"
 
