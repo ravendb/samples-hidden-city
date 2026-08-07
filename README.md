@@ -50,9 +50,9 @@ A few steps are required to run the application locally.
    1. [Python 3.11–3.13](https://www.python.org/downloads/) — 3.14 is not yet supported (pyravendb dependency)
    1. [uv](https://github.com/astral-sh/uv)
    1. [Docker](https://docs.docker.com/get-docker/) + Docker Compose (bundled with Docker Desktop) — Kubernetes mode's `start-k8s.ps1` will also install Docker Desktop via `winget` if it's missing, but Docker Desktop's first launch needs one manual step (accept the license, finish WSL2/Hyper-V setup, possibly reboot) before the script can continue
-   1. Kubernetes mode only — `start-k8s.ps1` installs all of these automatically via `winget` if missing, no manual setup required:
-      1. [kubectl](https://kubernetes.io/docs/tasks/tools/), [Helm](https://helm.sh/), [kind](https://kind.sigs.k8s.io/) — checked and installed unconditionally at startup
-      1. [OpenSSL](https://www.openssl.org/) — only checked/installed if the RavenDB TLS cert chain (`k8s/ravendb/certs/`) doesn't already exist locally; skipped entirely once that chain has been generated once
+   1. Kubernetes mode only — `start-k8s.ps1` installs all of these automatically, no manual setup required:
+      1. [kubectl](https://kubernetes.io/docs/tasks/tools/), [Helm](https://helm.sh/), [kind](https://kind.sigs.k8s.io/) — fetched at the exact versions pinned in `versions.env` straight into a local `.tools/` folder (no `winget`, no admin rights, no PATH changes)
+      1. [OpenSSL](https://www.openssl.org/) — via `winget`, only checked/installed if the RavenDB TLS cert chain (`k8s/ravendb/certs/`) doesn't already exist locally; skipped entirely once that chain has been generated once
 1. Run `.\start.ps1` and pick a mode when prompted, or skip the prompt directly:
    1. `.\start.ps1 -Mode Local` — docker-compose RavenDB, seeds fixture data, starts the agent
    1. `.\start.ps1 -Mode K8s` — kind cluster + cert-manager + ingress-nginx + RavenDB Operator + full app deployment
@@ -70,6 +70,8 @@ Without a Travelpayouts token, every demo scenario still runs end to end on fixt
 The bulk scraper's Travelpayouts endpoint only returns price and a transfer count, never the actual connecting airport — real itinerary segments require a partnership-gated API this project doesn't have. For routes with transfers, the scraper instead infers the likely hub offline from airport coordinates already in RavenDB. It's a heuristic, not ground truth — see [`src/scraper/hub_inference.py`](src/scraper/hub_inference.py).
 
 Kubernetes mode automates cert-manager, ingress-nginx, the RavenDB Operator, and the app deployment end to end — including the RavenDB cluster's TLS certificate chain, which `start-k8s.ps1` generates locally as a self-signed CA/server/client chain via `openssl` (see `Ensure-RavenDbCerts` in the script) and applies as Kubernetes secrets automatically. No manual Setup Wizard step or `kubectl create secret` command is required.
+
+The `kubernetes/ingress-nginx` project was archived on 2026-03-24 and will receive no further releases. `versions.env` pins the last one it published (`controller-v1.15.1`) rather than tracking a moving branch. Its own compatibility matrix only declares support up to Kubernetes 1.35, while `versions.env`'s pinned kind node image is already on 1.36 — outside that tested range (though not necessarily broken; the Ingress API surface it depends on rarely changes between minor Kubernetes releases). This gap only widens with every future kind bump, since ingress-nginx can never test against a newer Kubernetes again. Worth knowing before assuming a version bump here is risk-free.
 
 See [`docs/architecture.md`](docs/architecture.md) for the full token/egress cost breakdown across four infrastructure stages, and [`docs/hidden-city.md`](docs/hidden-city.md) for the hidden-city detection algorithm spec.
 

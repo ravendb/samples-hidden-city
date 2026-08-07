@@ -687,6 +687,13 @@ done
 if [[ "$raven_ready" == "true" ]]; then
   ok "RavenDB cluster Ready"
 else
+  # In CI/--no-wait this IS the smoke test -- a non-Ready cluster must fail
+  # the run, not just warn and let the script carry on to a green exit 0.
+  # Interactively, warn-and-continue is still useful: it leaves the cluster up
+  # so a developer can dig in with the commands below instead of losing it.
+  if [[ "$NO_WAIT" == "true" || "${CI:-}" == "true" ]]; then
+    fail "RavenDB did not reach Ready within 200s (see kubectl describe ravendbcluster ravendb-cluster -n $NS)."
+  fi
   warn "RavenDB did not reach Ready in time. Check:"
   warn "  kubectl describe ravendbcluster ravendb-cluster -n $NS"
   warn "  kubectl get pods -n $NS"

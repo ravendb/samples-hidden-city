@@ -25,7 +25,15 @@ jobs:
     name: Smoke test against latest upstream releases
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    continue-on-error: true
+    # NOT continue-on-error: this is a schedule-triggered run with no PR to
+    # gate -- there is nothing for a soft "keep going" to protect. Suppressing
+    # the job's own red/green status here was actively counterproductive: it
+    # meant a real break would still show a green run, which is exactly the
+    # "early warning nobody sees" failure mode this job exists to avoid. Let
+    # it fail for real; the "Open/update issue on failure" step below is what
+    # actually gets someone's attention, not the run's own color.
+    permissions:
+      issues: write
     env:
       OPENAI_API_KEY: sk-ci-placeholder-not-a-real-key
       TRAVELPAYOUTS_TOKEN: ci-placeholder
@@ -34,7 +42,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Write RavenDB license
+      # secrets.* are unavailable to fork-PR-triggered runs (N/A for this
+      # schedule/workflow_dispatch-only workflow, but kept consistent with
+      # k8s-pinned.yml) and evaluate to '' here if RAVENDB_LICENSE was never
+      # configured as a repo secret. Deliberately NOT writing an empty
+      # license.json in that case: k8s/start-k8s.sh's existing "source file
+      # missing -> skip creating the ravendb-license Secret" path is what
+      # should run instead (same as any developer without a local
+      # license.json) -- writing a 0-byte-but-existing file here would create
+      # an EMPTY Secret instead, a state the script was never designed for.
+      - name: Write RavenDB license (if available)
+        if: ${{ secrets.RAVENDB_LICENSE != '' }}
         env:
           RAVENDB_LICENSE: ${{ secrets.RAVENDB_LICENSE }}
         run: printf '%s' "$RAVENDB_LICENSE" > license.json
@@ -119,13 +137,33 @@ jobs:
           kubectl describe ravendbcluster ravendb-cluster -n hidden-city || true
           kubectl get events -A --sort-by=.lastTimestamp | tail -100 || true
 
-      - name: Report outcome
-        if: always()
+      - name: Report success
+        if: success()
+        run: echo "✅ Latest upstream releases still work -- nothing to do." >> "$GITHUB_STEP_SUMMARY"
+
+      # A merely-red nightly run is easy to miss -- nobody watches the Actions
+      # tab of a cron job. File (or update, if one's already open) a tracked
+      # issue instead, so a broken upstream actually reaches someone.
+      - name: Open/update issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [[ "${{ job.status }}" == "success" ]]; then
-            echo "✅ Latest upstream releases still work -- nothing to do." >> "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+          TITLE="nightly: latest upstream releases break k8s bring-up"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          gh label list --search upstream-drift --json name --jq '.[].name' | grep -qx upstream-drift ||
+            gh label create upstream-drift --color FBCA04 \
+              --description "Nightly k8s-nightly smoke test failed against latest upstream releases"
+
+          BODY=$(printf 'The nightly smoke test against the latest tagged upstream releases failed: %s\n\nCompare the job summary on that run against the pinned versions.env before bumping anything -- it lists the exact tag resolved for each component.' "$RUN_URL")
+
+          existing=$(gh issue list --label upstream-drift --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number')
+          if [[ -n "$existing" ]]; then
+            gh issue comment "$existing" --body "Still failing as of $(date -u +%Y-%m-%dT%H:%M:%SZ): $RUN_URL"
           else
-            echo "⚠️ Latest upstream releases broke the stack -- review before bumping versions.env." >> "$GITHUB_STEP_SUMMARY"
+            gh issue create --title "$TITLE" --label upstream-drift --body "$BODY"
           fi
 
       - name: Delete kind cluster
