@@ -147,6 +147,8 @@ Run `python -m scripts.measure_tokens` live to show real numbers during the demo
 
 ## Demo Commands Reference
 
+Windows (PowerShell):
+
 ```bash
 # Pick Local or Kubernetes interactively
 .\start.ps1
@@ -165,7 +167,21 @@ Run `python -m scripts.measure_tokens` live to show real numbers during the demo
 
 # K8s — redeploy without reinstalling cert-manager/ingress-nginx/operator
 .\start.ps1 -Mode K8s -SkipOperator
+```
 
+macOS/Linux (Kubernetes mode only — Local mode has no scripted bash equivalent yet):
+
+```bash
+# K8s — full deploy (kind + cert-manager + ingress-nginx + operator + cluster + app)
+bash k8s/start-k8s.sh
+
+# K8s — redeploy without reinstalling cert-manager/ingress-nginx/operator
+bash k8s/start-k8s.sh --skip-operator
+```
+
+Either platform:
+
+```bash
 # Show cluster state
 kubectl get ravendbclusters
 kubectl describe ravendbclusters ravendb-cluster

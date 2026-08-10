@@ -43,19 +43,27 @@ The following technologies were used to build this application:
 
 ## Local setup
 
-A few steps are required to run the application locally.
+A few steps are required to run the application locally. Kubernetes mode runs
+cross-platform (Windows, macOS, Linux); Local mode's scripted one-command
+wrapper is Windows-only for now (see below).
 
 1. Check out the Git repository
 1. Install prerequisites:
-   1. [Python 3.11–3.13](https://www.python.org/downloads/) — 3.14 is not yet supported (pyravendb dependency)
-   1. [uv](https://github.com/astral-sh/uv)
-   1. [Docker](https://docs.docker.com/get-docker/) + Docker Compose (bundled with Docker Desktop) — Kubernetes mode's `start-k8s.ps1` will also install Docker Desktop via `winget` if it's missing, but Docker Desktop's first launch needs one manual step (accept the license, finish WSL2/Hyper-V setup, possibly reboot) before the script can continue
-   1. Kubernetes mode only — `start-k8s.ps1` installs all of these automatically, no manual setup required:
-      1. [kubectl](https://kubernetes.io/docs/tasks/tools/), [Helm](https://helm.sh/), [kind](https://kind.sigs.k8s.io/) — fetched at the exact versions pinned in `versions.env` straight into a local `.tools/` folder (no `winget`, no admin rights, no PATH changes)
-      1. [OpenSSL](https://www.openssl.org/) — via `winget`, only checked/installed if the RavenDB TLS cert chain (`k8s/ravendb/certs/`) doesn't already exist locally; skipped entirely once that chain has been generated once
-1. Run `.\start.ps1` and pick a mode when prompted, or skip the prompt directly:
-   1. `.\start.ps1 -Mode Local` — docker-compose RavenDB, seeds fixture data, starts the agent
-   1. `.\start.ps1 -Mode K8s` — kind cluster + cert-manager + ingress-nginx + RavenDB Operator + full app deployment
+   1. **Local mode (docker-compose), any OS:**
+      1. [Python 3.11–3.13](https://www.python.org/downloads/) — 3.14 is not yet supported (pyravendb dependency)
+      1. [uv](https://github.com/astral-sh/uv)
+      1. [Docker](https://docs.docker.com/get-docker/) + Docker Compose (bundled with Docker Desktop)
+   1. **Kubernetes mode, Windows (`start-k8s.ps1`):**
+      1. [Docker](https://docs.docker.com/get-docker/) — `start-k8s.ps1` will also install Docker Desktop via `winget` if it's missing, but Docker Desktop's first launch needs one manual step (accept the license, finish WSL2/Hyper-V setup, possibly reboot) before the script can continue
+      1. Everything else installs automatically, no manual setup required: [kubectl](https://kubernetes.io/docs/tasks/tools/), [Helm](https://helm.sh/), [kind](https://kind.sigs.k8s.io/) are fetched at the exact versions pinned in `versions.env` straight into a local `.tools/` folder (no admin rights, no PATH changes); [OpenSSL](https://www.openssl.org/) installs via `winget`, only if the RavenDB TLS cert chain (`k8s/ravendb/certs/`) doesn't already exist locally
+   1. **Kubernetes mode, macOS/Linux (`k8s/start-k8s.sh`) — run end to end on real Ubuntu (via WSL2) as part of verifying this path:**
+      1. [Docker](https://docs.docker.com/get-docker/) (Docker Desktop on macOS, Docker Engine or Docker Desktop on Linux)
+      1. `bash` and `python3` (any version — used internally by the script itself for small YAML/JSON handling, not to run the app, so `pyproject.toml`'s 3.11–3.13 range doesn't apply here)
+      1. Everything else is automatic: `kubectl`/`Helm`/`kind` are fetched into `.tools/` for your OS and CPU architecture (amd64 or arm64, so Apple Silicon Macs get native binaries, not emulated x86_64 ones)
+   1. **Kubernetes mode on Windows via WSL2 instead of PowerShell:** Docker Desktop on Windows already requires WSL2 to run at all, so if you'd rather use `k8s/start-k8s.sh` than `start-k8s.ps1`, you likely already have what you need — with two things to check first: (a) your WSL distro needs an actual Linux userland with `bash` (Docker Desktop's own internal `docker-desktop` WSL distro does **not** have one — install a real distro, e.g. `wsl --install -d Ubuntu`, if you don't already have one); (b) enable that distro under Docker Desktop → Settings → Resources → WSL Integration, or its `docker` CLI won't reach the daemon.
+1. Run:
+   1. `.\start.ps1` (Windows) and pick a mode when prompted, or skip the prompt directly with `-Mode Local` / `-Mode K8s`
+   1. macOS/Linux, Kubernetes mode only: `bash k8s/start-k8s.sh` — mirrors `.\start-k8s.ps1 -Mode K8s` flag for flag (`--skip-build`, `--skip-operator`, `--delete-cluster`); Local mode has no scripted equivalent yet on macOS/Linux (the underlying `docker-compose.yml` and `uv`/Python commands `start.ps1` runs are portable, just not wrapped in a script there yet)
 1. Before the first run, both modes prompt you interactively in the terminal (Enter to skip an optional value) for:
    1. `OPENAI_API_KEY` — required, the agent won't start without it ([platform.openai.com](https://platform.openai.com/))
    1. `TRAVELPAYOUTS_TOKEN` — optional; without it the agent falls back to fixture data seeded by `scripts/seed_local.py`

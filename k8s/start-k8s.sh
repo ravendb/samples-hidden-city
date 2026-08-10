@@ -100,7 +100,23 @@ fetch_tool() {
   [[ -f "$exe_path" ]] || fail "failed to fetch $name $version from $url"
   echo "$dir"
 }
+# kind/kubectl/helm all publish release assets per-OS/arch under this exact
+# naming convention (linux|darwin, amd64|arm64) -- covers native Linux, CI
+# runners, and both Intel and Apple Silicon Macs. Confirmed missing entirely
+# in an earlier version of this script (hardcoded "linux"/"amd64"), which
+# would have silently fetched an x86_64 Linux binary on an Apple Silicon Mac.
+os="linux"
+case "$(uname -s)" in
+  Linux)  os="linux" ;;
+  Darwin) os="darwin" ;;
+  *) fail "unsupported OS: $(uname -s) -- this script supports Linux and macOS (use start-k8s.ps1 on Windows)" ;;
+esac
 arch="amd64"
+case "$(uname -m)" in
+  x86_64|amd64)  arch="amd64" ;;
+  arm64|aarch64) arch="arm64" ;;
+  *) fail "unsupported architecture: $(uname -m)" ;;
+esac
 
 # --- delete cluster shortcut ---
 # Fetches only kind (not kubectl/helm -- unneeded for this) before deleting.
@@ -108,7 +124,7 @@ arch="amd64"
 # fetched kind into .tools/ yet failed outright with "kind: command not
 # found" -- confirmed by actually running it, a real bug found by testing.
 if [[ "$DELETE_CLUSTER" == "true" ]]; then
-  kind_dir=$(fetch_tool "kind" "$KIND_VERSION" "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-${arch}" "kind")
+  kind_dir=$(fetch_tool "kind" "$KIND_VERSION" "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-${os}-${arch}" "kind")
   export PATH="$kind_dir:$PATH"
   step "Deleting kind cluster '$CLUSTER_NAME'"
   kind delete cluster --name "$CLUSTER_NAME"
@@ -210,9 +226,9 @@ preflight
 
 # --- prerequisites: kind/kubectl/helm fetched deterministically into .tools/ ---
 step "kind/kubectl/helm ($KIND_VERSION / $KUBECTL_VERSION / $HELM_VERSION)"
-kind_dir=$(fetch_tool "kind" "$KIND_VERSION" "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-${arch}" "kind")
-kubectl_dir=$(fetch_tool "kubectl" "$KUBECTL_VERSION" "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${arch}/kubectl" "kubectl")
-helm_dir=$(fetch_tool "helm" "$HELM_VERSION" "https://get.helm.sh/helm-${HELM_VERSION}-linux-${arch}.tar.gz" "helm" "linux-${arch}/helm")
+kind_dir=$(fetch_tool "kind" "$KIND_VERSION" "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-${os}-${arch}" "kind")
+kubectl_dir=$(fetch_tool "kubectl" "$KUBECTL_VERSION" "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/${os}/${arch}/kubectl" "kubectl")
+helm_dir=$(fetch_tool "helm" "$HELM_VERSION" "https://get.helm.sh/helm-${HELM_VERSION}-${os}-${arch}.tar.gz" "helm" "${os}-${arch}/helm")
 export PATH="$kind_dir:$kubectl_dir:$helm_dir:$PATH"
 # GitHub Actions runs each workflow step in a fresh shell -- `export PATH`
 # above only lasts for this process/step. Appending to $GITHUB_PATH (a no-op
@@ -461,7 +477,10 @@ EOF
 }
 
 raven_certs_dir="$root/k8s/ravendb/certs"
-mapfile -t raven_node_tags < <(get_raven_node_tags)
+# Not `mapfile` -- macOS ships bash 3.2 (GPLv3 licensing) by default, which
+# predates mapfile/readarray (bash 4.0+). This loop is 3.2-compatible.
+raven_node_tags=()
+while IFS= read -r tag; do raven_node_tags+=("$tag"); done < <(get_raven_node_tags)
 ensure_ravendb_certs "$raven_certs_dir" "${raven_node_tags[@]}"
 
 if [[ ! -f "$root/license.json" ]]; then
@@ -617,7 +636,8 @@ ok "RavenDB cluster chart applied"
 # Calico, not kindnet, correctly hairpins a pod's traffic back to itself).
 step "Configuring CoreDNS for RavenDB node hostnames"
 
-mapfile -t node_tags < <(get_raven_node_tags)
+node_tags=()
+while IFS= read -r tag; do node_tags+=("$tag"); done < <(get_raven_node_tags)
 hosts_lines=()
 for tag in "${node_tags[@]}"; do
   svc_ip=""
