@@ -66,8 +66,50 @@ get_raven_node_tags() {
     sed -E 's/^\s*-\s*tag:\s*([^[:space:]]+).*/\1/'
 }
 
+# Downloads a specific version's official release asset straight from each
+# project's own URL into .tools/<name>/<version>/, skipping the download if
+# that exact versioned path is already cached. No admin rights, no permanent
+# PATH mutation (only $PATH for this process, restored on exit). Just the
+# function definition here (defining it does no network I/O) -- the full
+# kind+kubectl+helm invocation happens after preflight below, so preflight
+# still runs before any network call for the main flow. --delete-cluster
+# is the one exception: it needs kind specifically before preflight even
+# applies (see that branch).
+fetch_tool() {
+  local name="$1" version="$2" url="$3" exe_name="$4" archive_entry="${5:-}"
+  local dir="$root/.tools/$name/$version"
+  local exe_path="$dir/$exe_name"
+  if [[ -f "$exe_path" ]]; then echo "$dir"; return 0; fi
+
+  mkdir -p "$dir"
+  echo "  Fetching $name $version..." >&2
+
+  if [[ -n "$archive_entry" ]]; then
+    local archive_path="$dir/download.tar.gz"
+    curl -fsSL -o "$archive_path" "$url"
+    tar -xzf "$archive_path" -C "$dir"
+    mv -f "$dir/$archive_entry" "$exe_path"
+    chmod +x "$exe_path"
+    rm -f "$archive_path"
+    find "$dir" -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
+  else
+    curl -fsSL -o "$exe_path" "$url"
+    chmod +x "$exe_path"
+  fi
+
+  [[ -f "$exe_path" ]] || fail "failed to fetch $name $version from $url"
+  echo "$dir"
+}
+arch="amd64"
+
 # --- delete cluster shortcut ---
+# Fetches only kind (not kubectl/helm -- unneeded for this) before deleting.
+# Before this fetch existed here, --delete-cluster on a machine that had never
+# fetched kind into .tools/ yet failed outright with "kind: command not
+# found" -- confirmed by actually running it, a real bug found by testing.
 if [[ "$DELETE_CLUSTER" == "true" ]]; then
+  kind_dir=$(fetch_tool "kind" "$KIND_VERSION" "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-${arch}" "kind")
+  export PATH="$kind_dir:$PATH"
   step "Deleting kind cluster '$CLUSTER_NAME'"
   kind delete cluster --name "$CLUSTER_NAME"
   ok "Cluster deleted"
@@ -84,20 +126,24 @@ preflight() {
   local failed=false
   printf '\n  Preflight:\n'
 
-  local req_python py_cmd="" pyver maj min
-  req_python=$(grep -oE 'requires-python\s*=\s*"[^"]+"' "$root/pyproject.toml" | sed -E 's/.*"([^"]+)"/\1/') || true
+  # NOT gated on pyproject.toml's requires-python (>=3.11,<3.14) -- that range
+  # is a real constraint only for the Local/docker-compose flow's `uv venv`,
+  # which actually runs the pyravendb-dependent app code against the host
+  # Python. This K8s flow never does that: the app runs inside the Docker
+  # image (its own separately pinned python:3.13.14-slim, asserted below).
+  # The host python3 here is only used by this script itself for small
+  # JSON/YAML text munging (set_secret_placeholder, the RavenDB readiness
+  # check) -- any reasonably modern Python 3 handles that fine. Gating this on
+  # the app's version range was confirmed wrong in practice: Ubuntu 26.04's
+  # default python3 is 3.14, which this check used to reject outright even
+  # though nothing in this flow actually needed <3.14.
+  local py_cmd=""
   command -v python3 >/dev/null 2>&1 && py_cmd=python3
   [[ -z "$py_cmd" ]] && command -v python >/dev/null 2>&1 && py_cmd=python
   if [[ -z "$py_cmd" ]]; then
-    printf '    FAIL  %s\n' "python/python3 not found on PATH"; failed=true
+    printf '    FAIL  %s\n' "python3 not found on PATH (needed internally by this script, not by the deployed app)"; failed=true
   else
-    pyver=$("$py_cmd" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1) || true
-    maj=$(echo "$pyver" | cut -d. -f1); min=$(echo "$pyver" | cut -d. -f2)
-    if [[ -n "$maj" && "$maj" == "3" && "$min" -ge 11 && "$min" -lt 14 ]]; then
-      printf '    OK    Python %s satisfies pyproject.toml requires-python (%s)\n' "$pyver" "$req_python"
-    else
-      printf '    FAIL  Python %s does not satisfy pyproject.toml requires-python (%s)\n' "$pyver" "$req_python"; failed=true
-    fi
+    printf '    OK    %s found (%s)\n' "$py_cmd" "$("$py_cmd" --version 2>&1)"
   fi
 
   if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
@@ -163,38 +209,7 @@ preflight() {
 preflight
 
 # --- prerequisites: kind/kubectl/helm fetched deterministically into .tools/ ---
-# Downloads a specific version's official release asset straight from each
-# project's own URL into .tools/<name>/<version>/, skipping the download if
-# that exact versioned path is already cached. No admin rights, no permanent
-# PATH mutation (only $PATH for this process, restored on exit).
-fetch_tool() {
-  local name="$1" version="$2" url="$3" exe_name="$4" archive_entry="${5:-}"
-  local dir="$root/.tools/$name/$version"
-  local exe_path="$dir/$exe_name"
-  if [[ -f "$exe_path" ]]; then echo "$dir"; return 0; fi
-
-  mkdir -p "$dir"
-  echo "  Fetching $name $version..." >&2
-
-  if [[ -n "$archive_entry" ]]; then
-    local archive_path="$dir/download.tar.gz"
-    curl -fsSL -o "$archive_path" "$url"
-    tar -xzf "$archive_path" -C "$dir"
-    mv -f "$dir/$archive_entry" "$exe_path"
-    chmod +x "$exe_path"
-    rm -f "$archive_path"
-    find "$dir" -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
-  else
-    curl -fsSL -o "$exe_path" "$url"
-    chmod +x "$exe_path"
-  fi
-
-  [[ -f "$exe_path" ]] || fail "failed to fetch $name $version from $url"
-  echo "$dir"
-}
-
 step "kind/kubectl/helm ($KIND_VERSION / $KUBECTL_VERSION / $HELM_VERSION)"
-arch="amd64"
 kind_dir=$(fetch_tool "kind" "$KIND_VERSION" "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-${arch}" "kind")
 kubectl_dir=$(fetch_tool "kubectl" "$KUBECTL_VERSION" "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${arch}/kubectl" "kubectl")
 helm_dir=$(fetch_tool "helm" "$HELM_VERSION" "https://get.helm.sh/helm-${HELM_VERSION}-linux-${arch}.tar.gz" "helm" "linux-${arch}/helm")
@@ -464,7 +479,18 @@ else
     fail "kind create cluster failed -- see output above."
   ok "Cluster created"
 fi
-kubectl config use-context "kind-$CLUSTER_NAME" >/dev/null
+# NOT `kubectl config use-context` -- a kind cluster's existence (a set of
+# Docker containers) and its kubeconfig entry (a file on whatever machine/user
+# ran `kind create cluster`) are independent state. The "reusing" branch above
+# only proves the cluster exists in Docker; if this environment's kubeconfig
+# never had the context (fresh CI runner sharing a Docker socket, cleared
+# ~/.kube/config, a different user/environment than the one that originally
+# created it -- confirmed hitting this for real: same Docker Desktop engine,
+# cluster created from Windows, this environment being WSL2 Ubuntu with its
+# own separate kubeconfig), `use-context` fails with "no context exists".
+# `kind export kubeconfig` (re)writes the entry and sets it current either
+# way -- safe and idempotent whether the cluster was just created or reused.
+kind export kubeconfig --name "$CLUSTER_NAME" >/dev/null
 
 # kind-config.yaml disables kindnet (the default CNI) -- it doesn't reliably
 # hairpin a pod's own traffic back to itself through its own Service ClusterIP,

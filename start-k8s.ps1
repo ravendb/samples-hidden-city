@@ -218,32 +218,19 @@ function Get-RavenNodeTags {
 }
 
 # Runs every check up front and reports a full pass/fail table, instead of
-# failing one check at a time minutes into a `kind create cluster` run. Two
-# kinds of check: machine state (Python/Docker/ports) and cross-file literal
-# pin consistency (Dockerfile/docker-compose.yml/values.yaml/kind-config.yaml
-# vs versions.env -- see versions.env's header comment for why these can't
-# just be templated from one source).
+# failing one check at a time minutes into a `kind create cluster` run. Machine
+# state (Docker/ports) and cross-file literal pin consistency
+# (Dockerfile/docker-compose.yml/values.yaml/kind-config.yaml vs versions.env
+# -- see versions.env's header comment for why these can't just be templated
+# from one source).
+#
+# No Python-version check here (unlike k8s/start-k8s.sh's preflight): this
+# script never shells out to python for anything -- Set-SecretPlaceholder uses
+# .NET regex, RavenDB readiness uses ConvertFrom-Json, both native PowerShell.
+# pyproject.toml's requires-python (>=3.11,<3.14) is a real constraint only for
+# the Local/docker-compose flow's `uv venv`, which is a different script.
 function Invoke-Preflight {
     $checks = @()
-
-    $pyproject = Get-Content "$root\pyproject.toml" -Raw
-    $reqMatch = [regex]::Match($pyproject, 'requires-python\s*=\s*"([^"]+)"')
-    $pyCmd = Get-Command python -ErrorAction SilentlyContinue
-    if (-not $pyCmd) { $pyCmd = Get-Command python3 -ErrorAction SilentlyContinue }
-    if (-not $pyCmd) {
-        $checks += @{ Ok = $false; Msg = "python/python3 not found on PATH" }
-    } else {
-        $verOut = & $pyCmd.Source --version 2>&1
-        $verMatch = [regex]::Match("$verOut", '(\d+)\.(\d+)\.(\d+)')
-        if ($verMatch.Success -and $reqMatch.Success) {
-            $maj = [int]$verMatch.Groups[1].Value; $min = [int]$verMatch.Groups[2].Value
-            # requires-python = ">=3.11,<3.14" -- simple major.minor bound check
-            $ok = ($maj -eq 3 -and $min -ge 11 -and $min -lt 14)
-            $checks += @{ Ok = $ok; Msg = "Python $($verMatch.Value) satisfies pyproject.toml requires-python ($($reqMatch.Groups[1].Value))" }
-        } else {
-            $checks += @{ Ok = $false; Msg = "Could not parse python --version output or pyproject.toml's requires-python" }
-        }
-    }
 
     # Docker daemon/memory: soft-checked here (installing Docker Desktop, if
     # missing, happens later in the script) -- the hard, fatal check is still
@@ -487,8 +474,19 @@ Write-Host ""
 Write-Host "  Make sure Docker Desktop is running before continuing (kind, the RavenDB" -ForegroundColor Yellow
 Write-Host "  cluster, and the app image all run as Docker containers)." -ForegroundColor Yellow
 
+$toolsArch = "amd64"
+
 # --- delete cluster shortcut ---
+# Fetches only kind (not kubectl/helm -- unneeded for this) before deleting.
+# Before this fetch existed here, -DeleteCluster on a machine that had never
+# fetched kind into .tools/ yet failed outright with "kind: command not
+# found" -- confirmed by actually running it, a real bug found by testing.
+# Before the .tools/ mechanism existed this never surfaced, since kind was
+# winget-installed globally on PATH regardless of step order.
 if ($DeleteCluster) {
+    $kindDir = Get-ToolBinary -Name "kind" -Version $Versions.KIND_VERSION -ExeName "kind.exe" `
+        -Url "https://kind.sigs.k8s.io/dl/$($Versions.KIND_VERSION)/kind-windows-$toolsArch"
+    $env:Path = "$kindDir;$env:Path"
     Write-Host "`nDeleting kind cluster '$ClusterName'..." -ForegroundColor Cyan
     kind delete cluster --name $ClusterName
     Write-Ok "Cluster deleted"
@@ -506,7 +504,6 @@ Invoke-Preflight
 # only means every bare `kind`/`kubectl`/`helm` call below the rest of this
 # script already uses resolves to the exact pinned binary.
 Write-Host ""
-$toolsArch = "amd64"
 $kindDir = Get-ToolBinary -Name "kind" -Version $Versions.KIND_VERSION -ExeName "kind.exe" `
     -Url "https://kind.sigs.k8s.io/dl/$($Versions.KIND_VERSION)/kind-windows-$toolsArch"
 $kubectlDir = Get-ToolBinary -Name "kubectl" -Version $Versions.KUBECTL_VERSION -ExeName "kubectl.exe" `
@@ -637,7 +634,17 @@ if ($existing -contains $ClusterName) {
     }
     Write-Ok "Cluster created"
 }
-kubectl config use-context "kind-$ClusterName" | Out-Null
+# NOT `kubectl config use-context` -- a kind cluster's existence (a set of
+# Docker containers) and its kubeconfig entry (a file on whatever machine/user
+# ran `kind create cluster`) are independent state. The "reusing" branch above
+# only proves the cluster exists in Docker; if this environment's kubeconfig
+# never had the context (confirmed hitting this for real while testing
+# k8s/start-k8s.sh from WSL2 Ubuntu against a cluster this script had created
+# from Windows on the same shared Docker Desktop engine), `use-context` fails
+# with "no context exists". `kind export kubeconfig` (re)writes the entry and
+# sets it current either way -- safe and idempotent whether the cluster was
+# just created above or reused.
+kind export kubeconfig --name $ClusterName | Out-Null
 
 # kind-config.yaml disables kindnet (the default CNI) -- it doesn't reliably
 # hairpin a pod's own traffic back to itself through its own Service ClusterIP,
