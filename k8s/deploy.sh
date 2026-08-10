@@ -63,12 +63,14 @@ else
 fi
 
 # ── step 2: docker build ──────────────────────────────────────────────────────
+image_rebuilt=false
 if [[ "$SKIP_BUILD" == "true" ]]; then
   warn "Skipping Docker build (--skip-build)"
 else
   step "Building Docker image  →  $IMAGE_TAG"
   docker build -t "$IMAGE_TAG" .
   ok "Image built: $IMAGE_TAG"
+  image_rebuilt=true
 fi
 
 # ── step 3: namespace + secrets ───────────────────────────────────────────────
@@ -130,6 +132,20 @@ kubectl get pods -n "$NS" -l app.kubernetes.io/name=ravendb-cluster 2>/dev/null 
 # ── step 6: full kustomize apply (rest of the app) ────────────────────────────
 step "Applying app manifests  (kubectl apply -k k8s/)"
 kubectl apply -k k8s/
+
+# `kubectl apply` only triggers a new rollout when the manifest text itself
+# changes -- with a mutable image tag, a rebuilt image (loaded into kind, or
+# pushed to a registry under the same tag) leaves the Deployment's pod
+# template textually identical, so already-running pods keep serving the OLD
+# image forever until something forces a restart (confirmed in practice: pods
+# stayed up unchanged after a rebuild, still serving stale code). Force it
+# whenever this run actually rebuilt the image -- not on every run, so an
+# unrelated --skip-operator-only re-run doesn't bounce pods for no reason.
+if [[ "$image_rebuilt" == "true" ]]; then
+  step "Restarting agent/worker to pick up the freshly built image"
+  kubectl rollout restart deployment/agent -n "$NS" >/dev/null
+  kubectl rollout restart deployment/subscription-worker -n "$NS" >/dev/null
+fi
 
 # ── step 7: wait for agent ────────────────────────────────────────────────────
 # 1200s, not 120s: k8s/agent/deployment.yaml's own readiness/liveness probes

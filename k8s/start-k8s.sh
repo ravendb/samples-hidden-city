@@ -582,6 +582,7 @@ done
 ok "RavenDB license/cert secrets applied"
 
 # --- docker build ---
+image_rebuilt=false
 if [[ "$SKIP_BUILD" != "true" ]]; then
   step "Building Docker image  ->  $IMAGE_TAG"
   docker build -t "$IMAGE_TAG" "$root" || fail "docker build failed"
@@ -589,6 +590,7 @@ if [[ "$SKIP_BUILD" != "true" ]]; then
   echo "  Loading image into kind cluster..."
   kind load docker-image "$IMAGE_TAG" --name "$CLUSTER_NAME"
   ok "Image loaded into kind"
+  image_rebuilt=true
 fi
 
 # --- cert-manager + ingress-nginx + operator (all via Helm/kubectl) ---
@@ -751,6 +753,20 @@ kubectl apply -f "$root/k8s/namespace.yaml"
 kubectl apply -f "$secrets_file"
 kubectl apply -k "$root/k8s/"
 ok "Manifests applied"
+
+# `kubectl apply` only triggers a new rollout when the manifest text itself
+# changes -- with a mutable `hidden-city:latest` tag, a rebuilt image loaded
+# under the same tag leaves the Deployment's pod template textually identical,
+# so already-running pods keep serving the OLD image forever until something
+# forces a restart (confirmed in practice: pods stayed up unchanged after a
+# rebuild+reload, still serving stale code). Force it whenever this run
+# actually rebuilt the image -- not on every run, so an unrelated
+# --skip-operator/config-only re-run doesn't bounce pods for no reason.
+if [[ "$image_rebuilt" == "true" ]]; then
+  echo "  Restarting agent/worker to pick up the freshly built image..."
+  kubectl rollout restart deployment/agent -n "$NS" >/dev/null
+  kubectl rollout restart deployment/subscription-worker -n "$NS" >/dev/null
+fi
 
 # 1200s, not 120s: k8s/agent/deployment.yaml's own readiness/liveness probes
 # already budget ~20 minutes for this exact case (its own comment: "_startup()
