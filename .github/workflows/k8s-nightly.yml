@@ -1,0 +1,171 @@
+name: k8s-nightly
+
+# Non-blocking early warning: re-resolves each dependency's latest TAGGED
+# release (never a moving branch ref -- that's the exact bug versions.env
+# exists to fix) and runs k8s/start-k8s.sh against those instead of the
+# pinned versions.env. A failure here means "bumping to today's latest release
+# of each dependency would break the stack" -- surfaced before anyone does
+# that bump manually, not a return to tracking master/main.
+#
+# NOT re-resolved -- these are literal pins baked into static YAML/Dockerfile
+# per versions.env's design (kept human-readable/standalone-applyable, not
+# templated from VERSIONS_FILE), so bumping them here wouldn't actually change
+# what the cluster runs: KIND_NODE_IMAGE, RAVENDB_IMAGE_TAG, PYTHON_IMAGE_TAG,
+# UV_VERSION. Also not re-resolved: INGRESS_NGINX_VERSION (upstream archived
+# 2026-03-24, nothing new to resolve), CERT_MANAGER_VERSION and
+# OPENSSL_VERSION (Windows-only / not part of this effort's moving-ref list).
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  latest-upstream:
+    name: Smoke test against latest upstream releases
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # NOT continue-on-error: this is a schedule-triggered run with no PR to
+    # gate -- there is nothing for a soft "keep going" to protect. Suppressing
+    # the job's own red/green status here was actively counterproductive: it
+    # meant a real break would still show a green run, which is exactly the
+    # "early warning nobody sees" failure mode this job exists to avoid. Let
+    # it fail for real; the "Open/update issue on failure" step below is what
+    # actually gets someone's attention, not the run's own color.
+    permissions:
+      issues: write
+    env:
+      OPENAI_API_KEY: sk-ci-placeholder-not-a-real-key
+      TRAVELPAYOUTS_TOKEN: ci-placeholder
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # secrets.* are unavailable to fork-PR-triggered runs (N/A for this
+      # schedule/workflow_dispatch-only workflow, but kept consistent with
+      # k8s-pinned.yml) and evaluate to '' here if RAVENDB_LICENSE was never
+      # configured as a repo secret. Deliberately NOT writing an empty
+      # license.json in that case: k8s/start-k8s.sh's existing "source file
+      # missing -> skip creating the ravendb-license Secret" path is what
+      # should run instead (same as any developer without a local
+      # license.json) -- writing a 0-byte-but-existing file here would create
+      # an EMPTY Secret instead, a state the script was never designed for.
+      - name: Write RavenDB license (if available)
+        if: ${{ secrets.RAVENDB_LICENSE != '' }}
+        env:
+          RAVENDB_LICENSE: ${{ secrets.RAVENDB_LICENSE }}
+        run: printf '%s' "$RAVENDB_LICENSE" > license.json
+
+      - name: Resolve latest upstream releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          source versions.env
+
+          latest_gh_release() {
+            curl -fsSL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/$1/releases/latest" | jq -r .tag_name
+          }
+          # Helm 4 exists but the user deliberately pinned the 3.x line (v3
+          # still gets security fixes) -- nightly tracks that same line, it
+          # doesn't silently jump major versions.
+          latest_gh_release_v3() {
+            curl -fsSL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/$1/releases?per_page=30" \
+              | jq -r '[.[] | select(.tag_name | startswith("v3."))][0].tag_name'
+          }
+          # Reads the chart's own published Helm repo index directly -- NOT
+          # Artifact Hub's API, which was confirmed to report a chart version
+          # (ravendb-cluster 2.1.0) that doesn't actually exist in this repo's
+          # index (real latest was 1.0.0), breaking `helm upgrade --install
+          # --version` outright. The index lists versions newest-first per
+          # chart, so the first `version:` line under a chart's 2-space-indent
+          # key is the latest.
+          latest_chart_version() {
+            curl -fsSL https://ravendb.github.io/ravendb-operator/helm/index.yaml | awk -v key="  ${1}:" '
+              $0 == key { infield=1; next }
+              infield && /^  [A-Za-z]/ { infield=0 }
+              infield && /^    version: / { print $2; exit }
+            '
+          }
+
+          NEW_CALICO_VERSION=$(latest_gh_release projectcalico/calico)
+          NEW_KIND_VERSION=$(latest_gh_release kubernetes-sigs/kind)
+          NEW_KUBECTL_VERSION=$(curl -fsSL https://dl.k8s.io/release/stable.txt)
+          NEW_HELM_VERSION=$(latest_gh_release_v3 helm/helm)
+          NEW_RAVENDB_OPERATOR_CHART_VERSION=$(latest_chart_version ravendb-operator)
+          NEW_RAVENDB_CLUSTER_CHART_VERSION=$(latest_chart_version ravendb-cluster)
+
+          {
+            echo "CALICO_VERSION=$NEW_CALICO_VERSION"
+            echo "INGRESS_NGINX_VERSION=$INGRESS_NGINX_VERSION"
+            echo "KIND_VERSION=$NEW_KIND_VERSION"
+            echo "KIND_NODE_IMAGE=$KIND_NODE_IMAGE"
+            echo "KUBECTL_VERSION=$NEW_KUBECTL_VERSION"
+            echo "HELM_VERSION=$NEW_HELM_VERSION"
+            echo "OPENSSL_VERSION=$OPENSSL_VERSION"
+            echo "CERT_MANAGER_VERSION=$CERT_MANAGER_VERSION"
+            echo "RAVENDB_OPERATOR_CHART_VERSION=$NEW_RAVENDB_OPERATOR_CHART_VERSION"
+            echo "RAVENDB_CLUSTER_CHART_VERSION=$NEW_RAVENDB_CLUSTER_CHART_VERSION"
+            echo "RAVENDB_IMAGE_TAG=$RAVENDB_IMAGE_TAG"
+            echo "PYTHON_IMAGE_TAG=$PYTHON_IMAGE_TAG"
+            echo "UV_VERSION=$UV_VERSION"
+          } > versions.nightly.env
+
+          {
+            echo "### Nightly vs pinned versions.env"
+            echo ""
+            echo "| Component | Pinned | Latest resolved |"
+            echo "|---|---|---|"
+            echo "| Calico | $CALICO_VERSION | $NEW_CALICO_VERSION |"
+            echo "| kind | $KIND_VERSION | $NEW_KIND_VERSION |"
+            echo "| kubectl | $KUBECTL_VERSION | $NEW_KUBECTL_VERSION |"
+            echo "| helm (3.x) | $HELM_VERSION | $NEW_HELM_VERSION |"
+            echo "| ravendb-operator chart | $RAVENDB_OPERATOR_CHART_VERSION | $NEW_RAVENDB_OPERATOR_CHART_VERSION |"
+            echo "| ravendb-cluster chart | $RAVENDB_CLUSTER_CHART_VERSION | $NEW_RAVENDB_CLUSTER_CHART_VERSION |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run k8s/start-k8s.sh (latest upstream releases)
+        env:
+          VERSIONS_FILE: ${{ github.workspace }}/versions.nightly.env
+        run: bash k8s/start-k8s.sh --no-wait
+
+      - name: Cluster state (on failure)
+        if: failure()
+        run: |
+          kubectl get pods -A || true
+          kubectl describe ravendbcluster ravendb-cluster -n hidden-city || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -100 || true
+
+      - name: Report success
+        if: success()
+        run: echo "✅ Latest upstream releases still work -- nothing to do." >> "$GITHUB_STEP_SUMMARY"
+
+      # A merely-red nightly run is easy to miss -- nobody watches the Actions
+      # tab of a cron job. File (or update, if one's already open) a tracked
+      # issue instead, so a broken upstream actually reaches someone.
+      - name: Open/update issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TITLE="nightly: latest upstream releases break k8s bring-up"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          gh label list --search upstream-drift --json name --jq '.[].name' | grep -qx upstream-drift ||
+            gh label create upstream-drift --color FBCA04 \
+              --description "Nightly k8s-nightly smoke test failed against latest upstream releases"
+
+          BODY=$(printf 'The nightly smoke test against the latest tagged upstream releases failed: %s\n\nCompare the job summary on that run against the pinned versions.env before bumping anything -- it lists the exact tag resolved for each component.' "$RUN_URL")
+
+          existing=$(gh issue list --label upstream-drift --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number')
+          if [[ -n "$existing" ]]; then
+            gh issue comment "$existing" --body "Still failing as of $(date -u +%Y-%m-%dT%H:%M:%SZ): $RUN_URL"
+          else
+            gh issue create --title "$TITLE" --label upstream-drift --body "$BODY"
+          fi
+
+      - name: Delete kind cluster
+        if: always()
+        run: kind delete cluster --name hidden-city || true

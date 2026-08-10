@@ -5,6 +5,7 @@ Called on every app startup — safe to run multiple times (skips if data exists
 import json
 import logging
 import os
+import time
 from pathlib import Path
 
 from ravendb import CreateDatabaseOperation
@@ -47,13 +48,43 @@ FIXTURE_ROUTES = [
 ]
 
 
-def ensure_database(store) -> None:
+def ensure_database(store, max_wait_seconds: float = 90) -> None:
+    """Creates the database if it doesn't exist yet, retrying with backoff for
+    up to max_wait_seconds while RavenDB itself isn't reachable yet.
+
+    This is called independently by every process that touches the database
+    (agent startup, worker, scraper CronJob) -- none of them may assume
+    another one already ran first. In Kubernetes, a pod commonly starts
+    before the RavenDB cluster has finished forming Raft quorum; a single,
+    unretried attempt here used to fail with a bare connection error that the
+    caller swallowed, leaving the database permanently missing and every
+    later request failing with DatabaseDoesNotExistException (confirmed in
+    practice, not hypothetical). ConcurrencyException -- another process won
+    the race to create it first -- is treated as success, not an error: this
+    function's contract is "the database exists when this returns", not
+    "this process created it".
+    """
     db_name = os.environ["RAVENDB_DATABASE"]
-    try:
-        store.maintenance.server.send(CreateDatabaseOperation(DatabaseRecord(db_name)))
-        log.info("Created database '%s'", db_name)
-    except ConcurrencyException:
-        pass
+    deadline = time.monotonic() + max_wait_seconds
+    delay = 1.0
+    last_error: Exception | None = None
+
+    while time.monotonic() < deadline:
+        try:
+            store.maintenance.server.send(CreateDatabaseOperation(DatabaseRecord(db_name)))
+            log.info("Created database '%s'", db_name)
+            break
+        except ConcurrencyException:
+            break
+        except Exception as e:
+            last_error = e
+            log.warning("ensure_database: RavenDB not ready yet (%s) -- retrying in %.0fs", e, delay)
+            time.sleep(delay)
+            delay = min(delay * 2, 10)
+    else:
+        raise RuntimeError(
+            f"RavenDB never became available to create database {db_name!r} within {max_wait_seconds:.0f}s"
+        ) from last_error
 
     ensure_expiration_enabled(store)
 

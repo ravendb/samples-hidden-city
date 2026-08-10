@@ -1,0 +1,78 @@
+name: k8s-pinned
+
+# Blocking infra smoke test against the versions pinned in versions.env
+# (repo root). Brings up the full local-kind stack via k8s/start-k8s.sh --
+# kind cluster, Calico, cert-manager, ingress-nginx, RavenDB Operator, RavenDB
+# cluster -- and asserts it reaches Ready (a non-Ready cluster fails this job,
+# it does not just warn). Infra-only: no OPENAI_API_KEY is required, the
+# agent's own /health is not exercised here.
+#
+# Runs without a license (unlicensed RavenDB Developer mode, single node --
+# see values.yaml) on fork PRs, since RAVENDB_LICENSE isn't exposed to those
+# runs; see the "Write RavenDB license" step below.
+#
+# See .github/workflows/k8s-nightly.yml for the non-blocking counterpart that
+# tests against each dependency's latest release instead of the pinned ones.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - versions.env
+      - k8s/**
+      - Dockerfile
+      - docker-compose.yml
+      - .github/workflows/k8s-pinned.yml
+  pull_request:
+    paths:
+      - versions.env
+      - k8s/**
+      - Dockerfile
+      - docker-compose.yml
+      - .github/workflows/k8s-pinned.yml
+  workflow_dispatch: {}
+
+jobs:
+  smoke-test:
+    name: Infra smoke test (pinned versions)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Infra-only smoke test -- no real key needed, the agent's own /health
+      # (which does need OPENAI_API_KEY) is not exercised by this job.
+      OPENAI_API_KEY: sk-ci-placeholder-not-a-real-key
+      TRAVELPAYOUTS_TOKEN: ci-placeholder
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # secrets.* are unavailable to workflow runs triggered by a fork PR --
+      # this evaluates to '' in that case, same as the secret never being
+      # configured. Deliberately NOT writing an empty license.json then:
+      # k8s/start-k8s.sh's existing "source file missing -> skip creating the
+      # ravendb-license Secret" path is what should run instead (same as any
+      # developer without a local license.json) -- writing a 0-byte-but-
+      # existing file here would create an EMPTY Secret instead, a state the
+      # script was never designed for. RavenDB supports this as unlicensed
+      # Developer mode for a single node, which is what values.yaml is
+      # currently pinned to anyway (see its own comment on the license limit).
+      - name: Write RavenDB license (if available)
+        if: ${{ secrets.RAVENDB_LICENSE != '' }}
+        env:
+          RAVENDB_LICENSE: ${{ secrets.RAVENDB_LICENSE }}
+        run: printf '%s' "$RAVENDB_LICENSE" > license.json
+
+      - name: Run k8s/start-k8s.sh (pinned versions.env)
+        run: bash k8s/start-k8s.sh --no-wait
+
+      - name: Cluster state (on failure)
+        if: failure()
+        run: |
+          kubectl get pods -A || true
+          kubectl describe ravendbcluster ravendb-cluster -n hidden-city || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -100 || true
+
+      - name: Delete kind cluster
+        if: always()
+        run: kind delete cluster --name hidden-city || true

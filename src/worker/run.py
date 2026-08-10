@@ -20,6 +20,7 @@ from ravendb.exceptions.raven_exceptions import RavenException
 load_dotenv()
 
 from src.db.client import get_store
+from src.db.seed import ensure_database
 
 log = logging.getLogger(__name__)
 
@@ -64,6 +65,11 @@ def _handle_batch(batch) -> None:
 def run() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     store = get_store()
+    # Runs as its own long-lived pod, independent of the agent's startup event
+    # — don't assume the agent has already created the database by the time
+    # this starts. Retries transient RavenDB unavailability on its own (see
+    # src/db/seed.py); safe to call even if the agent already did.
+    ensure_database(store)
 
     subscription_name = _create_subscription_if_missing(store)
     log.info("Listening on subscription: %s", subscription_name)

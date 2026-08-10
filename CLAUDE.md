@@ -75,12 +75,14 @@ and when. Nothing is blindly injected. Only the user's prompt leaves the cluster
 │   ├── worker/               # Subscription worker: price drop push alerts
 │   └── agent/                # FastAPI agent deployment
 ├── src/
+│   ├── db/                   # DocumentStore client, seed/bootstrap, expiration, geo/vector helpers
 │   ├── scraper/              # Travelpayouts bulk ingest (CronJob)
 │   ├── worker/               # RavenDB subscription listener + alert push
 │   ├── agent/                # FastAPI app + LLM agent loop
 │   ├── tools/                # Tool implementations (search_routes, get_live_prices, …)
 │   ├── hidden_city/          # Hidden city scoring logic
 │   └── chat/                 # Chat UI
+├── versions.env              # Single source of truth for every pinned tool/image/manifest version
 └── tests/
     ├── unit/
     └── integration/
@@ -89,16 +91,26 @@ and when. Nothing is blindly injected. Only the user's prompt leaves the cluster
 ## Key Commands
 
 ```bash
-# Local dev
+# One-command onboarding (kind cluster from scratch: kind, cert-manager, ingress-nginx,
+# operator, RavenDB cluster, app, all versions pinned in versions.env). Prompts
+# interactively for secrets/certs on first run; add flags to skip steps on re-runs.
+.\start.ps1                              # Windows: picks Local (docker-compose) or K8s (kind) interactively
+.\start.ps1 -Mode K8s                    # Windows: K8s mode directly, forwards to start-k8s.ps1
+.\start-k8s.ps1 -SkipBuild -SkipOperator # Windows: fast re-run, skips image rebuild + operator reinstall
+bash k8s/start-k8s.sh                    # macOS/Linux (or WSL2 on Windows): same flow, --skip-build/--skip-operator/--delete-cluster
+
+# Local dev (manual steps -- what start.ps1 -Mode Local automates)
 docker-compose up -d ravendb
 python -m scripts.seed_local          # seed airports + fixture routes
-uvicorn src.agent.app:app --reload    # start agent on :8000
+uvicorn src.agent.app:app --reload --port 8001    # start agent on :8001
 
 # Check operator + cluster state
 kubectl get ravendbclusters
 kubectl describe ravendbclusters ravendb-cluster
 
-# Deploy everything (shows operator install → RavenDB cluster readiness → agent rollout → URLs)
+# Deploy onto an ALREADY-EXISTING cluster (any cluster, not just kind -- no kind
+# provisioning, no cert generation; assumes k8s/secrets.local.yaml and the RavenDB
+# license/cert secrets already exist -- see k8s/operator/install.sh)
 cp k8s/secrets.yaml k8s/secrets.local.yaml && vim k8s/secrets.local.yaml
 bash k8s/deploy.sh                      # full deploy with progress output
 bash k8s/deploy.sh --skip-operator      # re-deploy without reinstalling the operator

@@ -19,8 +19,9 @@ import logging
 import os
 
 from src.db.client import doc_to_dict, get_store, load_all_airport_coords, put_document
-from src.db.expiration import ensure_expiration_enabled, expires_at
+from src.db.expiration import expires_at
 from src.db.models import RouteDocument
+from src.db.seed import ensure_database
 from src.hidden_city.enricher import enrich_hidden_city
 from src.scraper.hub_inference import infer_hub
 from src.scraper.travelpayouts import fetch_cheapest_from
@@ -99,7 +100,10 @@ _ASIA_CAPITALS = [
     "ULN",  # Ulaanbaatar, Mongolia
     "NQZ",  # Astana, Kazakhstan
     "TAS",  # Tashkent, Uzbekistan
-    "FRU",  # Bishkek, Kyrgyzstan
+    # FRU (Bishkek, Kyrgyzstan) removed -- Travelpayouts' /v2/prices/latest
+    # consistently 400s for this origin (confirmed repeatedly in practice, not
+    # transient), so every scrape wasted a call and a full traceback on a
+    # permanently-dead lookup instead of a real, retryable failure.
     "DYU",  # Dushanbe, Tajikistan
     "ASB",  # Ashgabat, Turkmenistan
     "GYD",  # Baku, Azerbaijan
@@ -172,9 +176,12 @@ def _resolve_hubs(
 async def run() -> None:
     token = os.environ["TRAVELPAYOUTS_TOKEN"]
     store = get_store()
-    # The CronJob runs as its own process, independent of the agent's startup event —
-    # don't assume the agent pod has already turned expiration on for this database.
-    ensure_expiration_enabled(store)
+    # The CronJob runs as its own process, independent of the agent's startup
+    # event — don't assume the agent pod has already created the database (or
+    # turned expiration on) by the time this runs. ensure_database covers both
+    # and retries transient RavenDB unavailability on its own (see
+    # src/db/seed.py); safe to call even if the agent already did.
+    ensure_database(store)
     origins = get_origins(store)
     airport_coords = load_all_airport_coords(store)
     total_written = 0

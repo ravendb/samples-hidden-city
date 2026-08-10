@@ -84,17 +84,20 @@ async def _startup() -> None:
     import asyncio
 
     host = os.getenv("HOST", "127.0.0.1")
-    port = os.getenv("PORT", "8000")
+    port = os.getenv("PORT", "8001")
     print("\n  Hidden City Flight Agent", flush=True)
     print("  DB       →  seeding check...", flush=True)
-    try:
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, seed_if_empty)
-    except Exception as _e:
-        import traceback
-        print(f"  DB       →  seed failed: {_e}", flush=True)
-        traceback.print_exc()
-        log.exception("DB seed failed — continuing without fixture data")
+    # Not caught: ensure_database (called from seed_if_empty) already retries
+    # transient RavenDB unavailability on its own for up to 90s (see
+    # src/db/seed.py) -- if it still raises after that, the database is
+    # genuinely unusable, and every request would fail with
+    # DatabaseDoesNotExistException anyway. A failed startup event makes
+    # uvicorn exit non-zero, which is what lets Kubernetes' pod restart policy
+    # retry the whole thing -- swallowing this here used to leave the pod
+    # reporting Ready and serving 500s forever instead (confirmed in
+    # practice), since /health doesn't check DB connectivity.
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, seed_if_empty)
 
     token = os.getenv("TRAVELPAYOUTS_TOKEN")
     if token:
@@ -193,6 +196,17 @@ async def profile_page() -> HTMLResponse:
     if not _PROFILE_PATH.exists():
         raise HTTPException(status_code=404, detail="Profile page not found")
     return HTMLResponse(_PROFILE_PATH.read_text(encoding="utf-8"))
+
+
+# Browsers request this from every page root regardless of which route served
+# the HTML, and it was 404ing on every single one — an inline SVG needs no
+# binary asset file to manage, and every modern browser accepts SVG favicons.
+_FAVICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y="0.85em" font-size="90">✈️</text></svg>'
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon() -> Response:
+    return Response(content=_FAVICON_SVG, media_type="image/svg+xml")
 
 
 class SetupRequest(BaseModel):

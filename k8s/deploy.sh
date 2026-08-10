@@ -12,6 +12,17 @@
 #   - Docker daemon running (unless --skip-build)
 set -euo pipefail
 
+# versions.env is the single source of truth (repo root). Capture any
+# explicitly pre-exported override BEFORE sourcing -- `source` unconditionally
+# reassigns, so it would otherwise clobber a caller's override with the file's
+# default.
+_user_ravendb_cluster_chart_version="${RAVENDB_CLUSTER_CHART_VERSION:-}"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+set -a
+source "${VERSIONS_FILE:-$root/versions.env}"
+set +a
+RAVENDB_CLUSTER_CHART_VERSION="${_user_ravendb_cluster_chart_version:-$RAVENDB_CLUSTER_CHART_VERSION}"
+
 SKIP_OPERATOR=false
 SKIP_BUILD=false
 IMAGE_TAG="${IMAGE_TAG:-hidden-city:latest}"
@@ -52,12 +63,14 @@ else
 fi
 
 # ── step 2: docker build ──────────────────────────────────────────────────────
+image_rebuilt=false
 if [[ "$SKIP_BUILD" == "true" ]]; then
   warn "Skipping Docker build (--skip-build)"
 else
   step "Building Docker image  →  $IMAGE_TAG"
   docker build -t "$IMAGE_TAG" .
   ok "Image built: $IMAGE_TAG"
+  image_rebuilt=true
 fi
 
 # ── step 3: namespace + secrets ───────────────────────────────────────────────
@@ -73,14 +86,17 @@ step "Installing RavenDB cluster  (helm upgrade --install ravendb-cluster ...)"
 echo "    Requires the license/cert secrets referenced by k8s/ravendb/values.yaml"
 echo "    to already exist in namespace '$NS' — see k8s/operator/install.sh."
 helm upgrade --install ravendb-cluster ravendb-operator/ravendb-cluster \
-  -n "$NS" --create-namespace -f k8s/ravendb/values.yaml
+  -n "$NS" --create-namespace -f k8s/ravendb/values.yaml \
+  --version "$RAVENDB_CLUSTER_CHART_VERSION"
 ok "RavenDB cluster chart applied"
 
-# ── step 5: full kustomize apply (rest of the app) ────────────────────────────
-step "Applying app manifests  (kubectl apply -k k8s/)"
-kubectl apply -k k8s/
-
-# ── step 6: wait for RavenDB cluster ─────────────────────────────────────────
+# ── step 5: wait for RavenDB cluster ─────────────────────────────────────────
+# Before the app manifests (step 6), not after: the agent pod's own startup
+# creates the RavenDB *database* itself, and used to race RavenDB's actual
+# readiness when applied first — a single failed attempt there was silently
+# swallowed, leaving DatabaseDoesNotExistException forever (confirmed in
+# practice; fixed in src/db/seed.py, which now retries on its own too, but
+# this ordering means fewer pods ever need to exercise that retry path).
 step "Waiting for RavenDB cluster to be ready (operator reconciliation)"
 echo "    This typically takes 60–120 s on first install."
 echo "    The operator is: creating PVCs → starting pods → forming Raft quorum → issuing TLS certs."
@@ -113,9 +129,31 @@ echo ""
 kubectl get pods -n "$NS" -l app.kubernetes.io/name=ravendb-cluster 2>/dev/null \
   || kubectl get pods -n "$NS" | grep ravendb || true
 
+# ── step 6: full kustomize apply (rest of the app) ────────────────────────────
+step "Applying app manifests  (kubectl apply -k k8s/)"
+kubectl apply -k k8s/
+
+# `kubectl apply` only triggers a new rollout when the manifest text itself
+# changes -- with a mutable image tag, a rebuilt image (loaded into kind, or
+# pushed to a registry under the same tag) leaves the Deployment's pod
+# template textually identical, so already-running pods keep serving the OLD
+# image forever until something forces a restart (confirmed in practice: pods
+# stayed up unchanged after a rebuild, still serving stale code). Force it
+# whenever this run actually rebuilt the image -- not on every run, so an
+# unrelated --skip-operator-only re-run doesn't bounce pods for no reason.
+if [[ "$image_rebuilt" == "true" ]]; then
+  step "Restarting agent/worker to pick up the freshly built image"
+  kubectl rollout restart deployment/agent -n "$NS" >/dev/null
+  kubectl rollout restart deployment/subscription-worker -n "$NS" >/dev/null
+fi
+
 # ── step 7: wait for agent ────────────────────────────────────────────────────
-step "Waiting for agent deployment to roll out"
-kubectl rollout status deployment/agent -n "$NS" --timeout=120s
+# 1200s, not 120s: k8s/agent/deployment.yaml's own readiness/liveness probes
+# already budget ~20 minutes for a cold DB (its own comment: "_startup() runs
+# the Travelpayouts bulk scraper synchronously before uvicorn serves... cold
+# start is easily 10+ minutes").
+step "Waiting for agent deployment to roll out (up to ~20 min on a cold DB)"
+kubectl rollout status deployment/agent -n "$NS" --timeout=1200s
 ok "Agent deployment ready"
 
 # ── step 8: final status ──────────────────────────────────────────────────────
@@ -149,7 +187,7 @@ elif [[ -n "$INGRESS_HOST" ]]; then
 else
   warn "Ingress IP not assigned yet. Try:"
   warn "  kubectl get ingress -n $NS"
-  warn "  kubectl port-forward svc/agent-svc 8000:80 -n $NS"
+  warn "  kubectl port-forward svc/agent-svc 8001:80 -n $NS"
 fi
 
 RAVENDB_LB=$(kubectl get svc -n "$NS" \

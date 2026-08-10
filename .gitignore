@@ -3,6 +3,8 @@
 license.json
 *.local.yaml
 k8s/ravendb/certs/
+.tools/
+versions.nightly.env
 __pycache__/
 *.pyc
 *.pyo

@@ -27,7 +27,9 @@
 spec:
   # Pinned, concrete tag -- the operator's admission webhook rejects floating
   # tags like ":7.2-latest" ("use a concrete, pinned tag"). Check for newer
-  # releases at https://hub.docker.com/r/ravendb/ravendb/tags.
+  # releases at https://hub.docker.com/r/ravendb/ravendb/tags. Must match
+  # RAVENDB_IMAGE_TAG in versions.env and docker-compose.yml's image: --
+  # preflight asserts all three agree.
   image: ravendb/ravendb:7.2.4-ubuntu.24.04-x64
   imagePullPolicy: IfNotPresent
   mode: None
