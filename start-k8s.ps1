@@ -876,16 +876,14 @@ $hostsEntries
     Write-Warn "No RavenDB node Services found -- CoreDNS not configured, bootstrap will likely fail"
 }
 
-# --- deploy app manifests ---
-$step++
-Write-Step $step $totalSteps "Deploying app manifests"
-
-kubectl apply -f "$root\k8s\namespace.yaml"
-kubectl apply -f $secretsFile
-kubectl apply -k "$root\k8s\"
-Write-Ok "Manifests applied"
-
 # --- wait for RavenDB ---
+# Before app manifests, not after: the agent pod's own startup used to race
+# RavenDB's readiness (it starts trying to create the RavenDB *database*
+# immediately), and a single failed attempt there was silently swallowed --
+# confirmed in practice serving 500s forever with the cluster otherwise
+# healthy. src/db/seed.py's ensure_database now retries that on its own, so
+# this reordering is defense in depth (fewer pods ever need to exercise that
+# retry path), not the only thing standing between here and that bug.
 $step++
 Write-Step $step $totalSteps "Waiting for RavenDB cluster (60-120s)"
 Write-Host "  Operator is: creating PVCs -> starting pods -> forming Raft quorum -> issuing TLS certs" -ForegroundColor Gray
@@ -917,9 +915,25 @@ if ($ravenReady) {
     Write-Warn "  kubectl get pods -n $NS"
 }
 
+# --- deploy app manifests ---
 $step++
-Write-Step $step $totalSteps "Waiting for agent deployment"
-kubectl rollout status deployment/agent -n $NS --timeout=120s
+Write-Step $step $totalSteps "Deploying app manifests"
+
+kubectl apply -f "$root\k8s\namespace.yaml"
+kubectl apply -f $secretsFile
+kubectl apply -k "$root\k8s\"
+Write-Ok "Manifests applied"
+
+$step++
+Write-Step $step $totalSteps "Waiting for agent deployment (up to ~20 min on a cold DB -- see k8s/agent/deployment.yaml)"
+# 1200s, not 120s: k8s/agent/deployment.yaml's own readiness/liveness probes
+# already budget ~20 minutes for this exact case (its own comment: "_startup()
+# runs the Travelpayouts bulk scraper synchronously before uvicorn serves...
+# cold start is easily 10+ minutes"). This step's timeout used to be far
+# shorter than what the pod itself is configured to tolerate -- harmless
+# before database creation reliably succeeded (a failed, swallowed seed made
+# startup fast, for the wrong reason), but a real bottleneck now that it does.
+kubectl rollout status deployment/agent -n $NS --timeout=1200s
 if ($LASTEXITCODE -ne 0) { Write-Host "  ERROR: agent deployment did not roll out in time." -ForegroundColor Red; exit 1 }
 Write-Ok "Agent deployment ready"
 

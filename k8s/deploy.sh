@@ -126,8 +126,12 @@ kubectl get pods -n "$NS" -l app.kubernetes.io/name=ravendb-cluster 2>/dev/null 
   || kubectl get pods -n "$NS" | grep ravendb || true
 
 # ── step 7: wait for agent ────────────────────────────────────────────────────
-step "Waiting for agent deployment to roll out"
-kubectl rollout status deployment/agent -n "$NS" --timeout=120s
+# 1200s, not 120s: k8s/agent/deployment.yaml's own readiness/liveness probes
+# already budget ~20 minutes for a cold DB (its own comment: "_startup() runs
+# the Travelpayouts bulk scraper synchronously before uvicorn serves... cold
+# start is easily 10+ minutes").
+step "Waiting for agent deployment to roll out (up to ~20 min on a cold DB)"
+kubectl rollout status deployment/agent -n "$NS" --timeout=1200s
 ok "Agent deployment ready"
 
 # ── step 8: final status ──────────────────────────────────────────────────────
