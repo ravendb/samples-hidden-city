@@ -198,6 +198,17 @@ async def profile_page() -> HTMLResponse:
     return HTMLResponse(_PROFILE_PATH.read_text(encoding="utf-8"))
 
 
+# Browsers request this from every page root regardless of which route served
+# the HTML, and it was 404ing on every single one — an inline SVG needs no
+# binary asset file to manage, and every modern browser accepts SVG favicons.
+_FAVICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y="0.85em" font-size="90">✈️</text></svg>'
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon() -> Response:
+    return Response(content=_FAVICON_SVG, media_type="image/svg+xml")
+
+
 class SetupRequest(BaseModel):
     openai_api_key: str | None = None
     ravendb_license: str | None = None
