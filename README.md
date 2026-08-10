@@ -24,6 +24,9 @@ The following RavenDB features are used to build the application:
    1. Document Expiration — price fields auto-expire 20 minutes after write via `@expires` metadata, no cleanup job — [`src/db/expiration.py`](src/db/expiration.py)
    1. Attachments — passport scan, bag photo, and a preference PDF stored as binary blobs on the user document, never inflating a query — [`src/tools/user_attachments.py`](src/tools/user_attachments.py)
    1. Data Subscriptions — push-only price-drop alerts, no polling and no message broker — [`src/worker/run.py`](src/worker/run.py)
+   1. Batched Multi-Document Load — conversation history and user profile loaded in a single round trip per chat turn, even across two different collections — [`src/agent/app.py`](src/agent/app.py)
+   1. Server-Wide Operations — `CreateDatabaseOperation` bootstraps the database on first boot; every process that touches it (agent, worker, scraper) calls this independently and retries transient RavenDB unavailability, so none of them is a single point of failure for it — [`src/db/seed.py`](src/db/seed.py)
+   1. Client Certificate Authentication — mTLS between every Python process and RavenDB inside the cluster, never plaintext — [`src/db/client.py`](src/db/client.py)
 1. Kubernetes
    1. RavenDB Kubernetes Operator — a multi-node cluster declared as a single CRD; bootstrap, cert wiring, and rolling upgrades are handled automatically — [ravendb-operator](https://github.com/ravendb/ravendb-operator), [`k8s/operator/`](k8s/operator/). Currently scaled to 1 node in [`k8s/ravendb/values.yaml`](k8s/ravendb/values.yaml) pending a multi-node-capable license (see that file's comment) — restore nodes b/c there to demo the 3-node case.
 

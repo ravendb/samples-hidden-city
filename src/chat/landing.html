@@ -260,29 +260,49 @@ html, body { background: var(--bg); color: var(--text); font-family: var(--font)
     <h2 class="section-title">RavenDB features used</h2>
     <ul class="feature-list">
       <li class="feature-item">
-        <a class="feature-name" href="https://ravendb.net/docs/article-page/7.0/csharp/document-extensions/timeseries/overview" target="_blank" rel="noreferrer">Documents</a>
+        <a class="feature-name" href="https://ravendb.net/docs/article-page/7.0/csharp/client-api/creating-document-store" target="_blank" rel="noreferrer">Document Store</a>
         <span class="feature-dash">—</span>
-        <span>Route data, conversation sessions, airport metadata — all in one cluster</span>
+        <span>Route data, conversation sessions, airport and user documents — schema-flexible, no migrations</span>
       </li>
       <li class="feature-item">
-        <a class="feature-name" href="https://ravendb.net/docs/article-page/7.0/csharp/indexes/querying/full-text-search" target="_blank" rel="noreferrer">Vector Search</a>
+        <a class="feature-name" href="https://ravendb.net/docs/article-page/7.0/csharp/indexes/querying/full-text-search" target="_blank" rel="noreferrer">Auto-Indexes</a>
         <span class="feature-dash">—</span>
-        <span>Semantic route similarity — search by country instead of a specific airport (e.g. "England" surfaces LHR, LGW, MAN) or by vibe ("something like LHR but cheaper") — no separate vector DB</span>
+        <span>Airport city/IATA full-text lookup — RavenDB creates the index itself on first query, never hand-defined</span>
       </li>
       <li class="feature-item">
-        <a class="feature-name" href="https://ravendb.net/docs/article-page/7.0/csharp/client-api/data-subscriptions/what-are-data-subscriptions" target="_blank" rel="noreferrer">Subscriptions</a>
+        <a class="feature-name" href="https://ravendb.net/docs/article-page/7.0/csharp/indexes/querying/vector-search" target="_blank" rel="noreferrer">Vector Search</a>
         <span class="feature-dash">—</span>
-        <span>Price-drop push alerts to the agent worker — zero polling loops</span>
+        <span>Nearby-airport fallback when no direct route exists, via a 3D unit-sphere projection of each airport's lat/lng — geographically accurate, no separate vector DB</span>
+      </li>
+      <li class="feature-item">
+        <a class="feature-name" href="https://ravendb.net/docs/article-page/7.0/csharp/server/extensions/expiration" target="_blank" rel="noreferrer">Document Expiration</a>
+        <span class="feature-dash">—</span>
+        <span>Price fields auto-expire after 20 min via @expires metadata — no manual TTL management</span>
       </li>
       <li class="feature-item">
         <a class="feature-name" href="https://ravendb.net/docs/article-page/7.0/csharp/document-extensions/attachments/what-are-attachments" target="_blank" rel="noreferrer">Attachments</a>
         <span class="feature-dash">—</span>
-        <span>Passport scans, bag photos, preference sheets — saved to the user profile and persisted in the database</span>
+        <span>Passport scans, bag photos, preference sheets — a binary channel bound to the user document, never inflating an ordinary document read</span>
       </li>
       <li class="feature-item">
-        <a class="feature-name" href="https://ravendb.net/docs/article-page/7.0/csharp/document-extensions/expiration" target="_blank" rel="noreferrer">Document Expiration</a>
+        <a class="feature-name" href="https://ravendb.net/docs/article-page/7.0/csharp/client-api/data-subscriptions/what-are-data-subscriptions" target="_blank" rel="noreferrer">Data Subscriptions</a>
         <span class="feature-dash">—</span>
-        <span>Price fields auto-expire after 20 min via @expires metadata — no manual TTL management</span>
+        <span>Price-drop push alerts to the agent worker — zero polling loops, zero message broker</span>
+      </li>
+      <li class="feature-item">
+        <a class="feature-name" href="https://ravendb.net/docs/article-page/7.0/csharp/client-api/session/loading-entities" target="_blank" rel="noreferrer">Batched Multi-Document Load</a>
+        <span class="feature-dash">—</span>
+        <span>Conversation history and user profile loaded in a single round trip per chat turn, even across two different collections</span>
+      </li>
+      <li class="feature-item">
+        <a class="feature-name" href="https://docs.ravendb.net/7.2/client-api/setting-up-authentication-and-authorization" target="_blank" rel="noreferrer">Client Certificate Authentication</a>
+        <span class="feature-dash">—</span>
+        <span>mTLS between the agent and RavenDB inside the cluster — never plaintext, even on the internal network</span>
+      </li>
+      <li class="feature-item">
+        <a class="feature-name" href="https://ravendb.net/docs/article-page/7.0/csharp/client-api/operations/server-wide/create-database" target="_blank" rel="noreferrer">Server-Wide Operations</a>
+        <span class="feature-dash">—</span>
+        <span>Database bootstrap on first boot (CreateDatabaseOperation) — every component that touches the database can self-heal, no single pod is a single point of failure for it</span>
       </li>
       <li class="feature-item">
         <a class="feature-name" href="https://ravendb.net/docs/article-page/7.0/csharp/server/cluster/overview" target="_blank" rel="noreferrer">Kubernetes Operator</a>
