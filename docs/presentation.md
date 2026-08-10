@@ -2,15 +2,22 @@
 
 ## RavenDB Operator Demo (~5 minutes)
 
+> **Current environment note:** `k8s/ravendb/values.yaml` is presently scaled to
+> **1 node** (nodes b/c commented out) — the license loaded in this environment
+> doesn't permit multi-node clusters (see that file's own comment). Steps below
+> are written for the 1-node reality; where a step specifically needs 3 nodes to
+> land (quorum, the admission-webhook demo), that's called out — restore b/c in
+> the values file first if you have a multi-node-capable license.
+
 ### Step 1 — Show the problem (30 sec)
 
-> "Setting up a 3-node RavenDB cluster with Raft quorum, TLS, and rolling upgrades manually takes dozens of steps. Instead, we have one values file."
+> "Setting up a RavenDB cluster with Raft quorum, TLS, and rolling upgrades manually takes dozens of steps. Instead, we have one values file — this one happens to be scaled to 1 node for this environment's license, but the same file scales to 3 by uncommenting two entries."
 
 Show the manifest:
 ```bash
 cat k8s/ravendb/values.yaml
 ```
-Point to the 3-entry `nodes` list and `mode: None` (self-signed TLS).
+Point to the `nodes` list (1 active entry today, b/c commented out just below it) and `mode: None` (self-signed TLS).
 
 ---
 
@@ -32,7 +39,7 @@ helm upgrade --install ravendb-cluster ravendb-operator/ravendb-cluster \
 watch kubectl get pods -n hidden-city
 ```
 
-Watch 3 pods appear live. Say:
+Watch the pod(s) appear live (1 today; would be 3 with the values.yaml change noted above). Say:
 > "The operator bootstraps the Raft cluster, generates TLS certificates, and waits for quorum before moving to the next node."
 
 ---
@@ -49,7 +56,12 @@ Point to `Status.Conditions` — `Ready: True`:
 
 ---
 
-### Step 5 — Show admission webhook (optional, high impact)
+### Step 5 — Show admission webhook (optional, high impact — requires the 3-node config)
+
+Needs `values.yaml` scaled to 3 nodes (see the note at the top of this section)
+— with only 1 node active, `/spec/nodes/2` doesn't exist and this patch fails
+for the wrong reason (index out of range, not the webhook). Skip this step
+entirely on the current 1-node environment.
 
 ```bash
 kubectl patch ravendbcluster ravendb-cluster -n hidden-city \

@@ -30,7 +30,7 @@ A teraz to samo, ale inaczej.
 
 (pokaż diagram architektury)
 
-Agent działa w Kubernetes. RavenDB działa w tym samym klastrze — jako operator, trzy nody, HA out of the box. Dane przylatują z Travelpayouts co 6 godzin przez CronJob. Na cache miss agent odpytuje Travelpayouts live API — zdarza się to w ~5% przypadków.
+Agent działa w Kubernetes. RavenDB działa w tym samym klastrze — jako operator, architektura multi-node, HA out of the box (w tym środowisku demo skalowane do 1 noda przez limit licencji — patrz komentarz w k8s/ravendb/values.yaml; docelowo 3 nody to zmiana jednego pliku). Dane przylatują z Travelpayouts co 6 godzin przez CronJob. Na cache miss agent odpytuje Travelpayouts live API — zdarza się to w ~5% przypadków.
 
 Użytkownik pyta o loty. Agent nie wkłada danych do prompta. Zamiast tego model wywołuje narzędzie — search_routes(). RavenDB odpowiada lokalnie: pre-strukturyzowany dokument z origin, destination, ceną, hidden city score. Około 400 tokenów. Tool result wraca do tego samego API call.
 
@@ -101,4 +101,4 @@ RavenDB ma otwarte API klienckie. Narzędzia agenta to thin wrapper — search_r
 
 "Co z większym ruchem?"
 
-Tabela w prezentacji: przy 100 000 req/dzień saving wynosi $11 550/dzień. Trzy nody RavenDB skalują poziomo — dokładasz nody przez operator.
+Tabela w prezentacji: przy 100 000 req/dzień saving wynosi $11 550/dzień. RavenDB skaluje się poziomo — dokładasz nody przez operator (w tym demo obecnie 1 node z powodu limitu licencji, patrz k8s/ravendb/values.yaml).

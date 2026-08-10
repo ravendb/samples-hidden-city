@@ -88,11 +88,13 @@ helm upgrade --install ravendb-cluster ravendb-operator/ravendb-cluster \
   --version "$RAVENDB_CLUSTER_CHART_VERSION"
 ok "RavenDB cluster chart applied"
 
-# ── step 5: full kustomize apply (rest of the app) ────────────────────────────
-step "Applying app manifests  (kubectl apply -k k8s/)"
-kubectl apply -k k8s/
-
-# ── step 6: wait for RavenDB cluster ─────────────────────────────────────────
+# ── step 5: wait for RavenDB cluster ─────────────────────────────────────────
+# Before the app manifests (step 6), not after: the agent pod's own startup
+# creates the RavenDB *database* itself, and used to race RavenDB's actual
+# readiness when applied first — a single failed attempt there was silently
+# swallowed, leaving DatabaseDoesNotExistException forever (confirmed in
+# practice; fixed in src/db/seed.py, which now retries on its own too, but
+# this ordering means fewer pods ever need to exercise that retry path).
 step "Waiting for RavenDB cluster to be ready (operator reconciliation)"
 echo "    This typically takes 60–120 s on first install."
 echo "    The operator is: creating PVCs → starting pods → forming Raft quorum → issuing TLS certs."
@@ -124,6 +126,10 @@ fi
 echo ""
 kubectl get pods -n "$NS" -l app.kubernetes.io/name=ravendb-cluster 2>/dev/null \
   || kubectl get pods -n "$NS" | grep ravendb || true
+
+# ── step 6: full kustomize apply (rest of the app) ────────────────────────────
+step "Applying app manifests  (kubectl apply -k k8s/)"
+kubectl apply -k k8s/
 
 # ── step 7: wait for agent ────────────────────────────────────────────────────
 # 1200s, not 120s: k8s/agent/deployment.yaml's own readiness/liveness probes

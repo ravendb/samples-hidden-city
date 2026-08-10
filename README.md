@@ -25,7 +25,7 @@ The following RavenDB features are used to build the application:
    1. Attachments — passport scan, bag photo, and a preference PDF stored as binary blobs on the user document, never inflating a query — [`src/tools/user_attachments.py`](src/tools/user_attachments.py)
    1. Data Subscriptions — push-only price-drop alerts, no polling and no message broker — [`src/worker/run.py`](src/worker/run.py)
 1. Kubernetes
-   1. RavenDB Kubernetes Operator — a 3-node cluster declared as a CRD; bootstrap, cert wiring, and rolling upgrades are handled automatically — [ravendb-operator](https://github.com/ravendb/ravendb-operator), [`k8s/operator/`](k8s/operator/)
+   1. RavenDB Kubernetes Operator — a multi-node cluster declared as a single CRD; bootstrap, cert wiring, and rolling upgrades are handled automatically — [ravendb-operator](https://github.com/ravendb/ravendb-operator), [`k8s/operator/`](k8s/operator/). Currently scaled to 1 node in [`k8s/ravendb/values.yaml`](k8s/ravendb/values.yaml) pending a multi-node-capable license (see that file's comment) — restore nodes b/c there to demo the 3-node case.
 
 ## Technologies
 
@@ -63,7 +63,7 @@ wrapper is Windows-only for now (see below).
    1. **Kubernetes mode on Windows via WSL2 instead of PowerShell:** Docker Desktop on Windows already requires WSL2 to run at all, so if you'd rather use `k8s/start-k8s.sh` than `start-k8s.ps1`, you likely already have what you need — with two things to check first: (a) your WSL distro needs an actual Linux userland with `bash` (Docker Desktop's own internal `docker-desktop` WSL distro does **not** have one — install a real distro, e.g. `wsl --install -d Ubuntu`, if you don't already have one); (b) enable that distro under Docker Desktop → Settings → Resources → WSL Integration, or its `docker` CLI won't reach the daemon.
 1. Run:
    1. `.\start.ps1` (Windows) and pick a mode when prompted, or skip the prompt directly with `-Mode Local` / `-Mode K8s`
-   1. macOS/Linux, Kubernetes mode only: `bash k8s/start-k8s.sh` — mirrors `.\start-k8s.ps1 -Mode K8s` flag for flag (`--skip-build`, `--skip-operator`, `--delete-cluster`); Local mode has no scripted equivalent yet on macOS/Linux (the underlying `docker-compose.yml` and `uv`/Python commands `start.ps1` runs are portable, just not wrapped in a script there yet)
+   1. macOS/Linux, Kubernetes mode only: `bash k8s/start-k8s.sh` — mirrors `.\start-k8s.ps1`'s `-SkipBuild`/`-SkipOperator`/`-DeleteCluster`/`-ClusterName` as `--skip-build`/`--skip-operator`/`--delete-cluster`/`--cluster-name=<name>`, plus a bash-only `--no-wait` (exit once RavenDB and the agent are Ready instead of blocking on port-forwards — what CI uses). Local mode has no scripted equivalent yet on macOS/Linux (the underlying `docker-compose.yml` and `uv`/Python commands `start.ps1` runs are portable, just not wrapped in a script there yet)
 1. Before the first run, both modes prompt you interactively in the terminal (Enter to skip an optional value) for:
    1. `OPENAI_API_KEY` — required, the agent won't start without it ([platform.openai.com](https://platform.openai.com/))
    1. `TRAVELPAYOUTS_TOKEN` — optional; without it the agent falls back to fixture data seeded by `scripts/seed_local.py`
