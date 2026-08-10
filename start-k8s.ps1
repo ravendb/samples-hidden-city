@@ -385,14 +385,37 @@ function Ensure-RavenDbCerts {
 
     # Fail fast with a clear message if the legacy provider (needed for the
     # -legacy PKCS12 export below) can't load, instead of surfacing a cryptic
-    # DSO_load stack trace deep inside pkcs12 export. Usually means a second,
-    # mismatched openssl install (e.g. Git for Windows') was shadowing
-    # FireDaemon's on PATH -- see Resolve-OpenSslExe above.
+    # DSO_load stack trace deep inside pkcs12 export.
     $legacyProbe = & $openssl list -providers -legacy 2>&1
-    if ($LASTEXITCODE -ne 0 -or ($legacyProbe -join "`n") -notmatch "legacy") {
+    $legacyOk = ($LASTEXITCODE -eq 0) -and (($legacyProbe -join "`n") -match "legacy")
+
+    if (-not $legacyOk) {
+        # Confirmed hitting this for real: a DIFFERENT openssl (e.g. an old
+        # "OpenSSL-Win64" install with no provider architecture at all --
+        # "list: Unknown option: -legacy") was already on PATH, so
+        # Resolve-OpenSslExe's PATH fallback found *something* and never
+        # bothered installing FireDaemon at all, above. Don't just error out
+        # here: install/repair FireDaemon specifically and re-resolve --
+        # Resolve-OpenSslExe checks FireDaemon's own install directory before
+        # ever falling back to PATH, so this bypasses whatever broken openssl
+        # was shadowing it, the same way the "not found at all" branch above
+        # already does.
+        if (Get-Command winget -ErrorAction SilentlyContinue) {
+            Write-Warn "Resolved openssl ($openssl) can't load the 'legacy' provider -- installing FireDaemon.OpenSSL $($Versions.OPENSSL_VERSION) instead..."
+            winget install -e --id FireDaemon.OpenSSL --version $Versions.OPENSSL_VERSION --accept-package-agreements --accept-source-agreements
+            $openssl = Resolve-OpenSslExe
+            if ($openssl) {
+                $legacyProbe = & $openssl list -providers -legacy 2>&1
+                $legacyOk = ($LASTEXITCODE -eq 0) -and (($legacyProbe -join "`n") -match "legacy")
+            }
+        }
+    }
+
+    if (-not $legacyOk) {
         Write-Host "  ERROR: openssl's 'legacy' provider failed to load (needed for PKCS12 export)." -ForegroundColor Red
         Write-Host "    Resolved openssl: $openssl" -ForegroundColor Gray
-        Write-Host "    Reinstall it with: winget install -e --id FireDaemon.OpenSSL --force" -ForegroundColor Gray
+        Write-Host "    A different/older openssl install may be shadowing FireDaemon's -- check with" -ForegroundColor Gray
+        Write-Host "    'where.exe openssl' and remove or reorder it on PATH, then re-run." -ForegroundColor Gray
         Write-Host "    $legacyProbe" -ForegroundColor Gray
         exit 1
     }
