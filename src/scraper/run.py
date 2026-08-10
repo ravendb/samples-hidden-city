@@ -100,7 +100,10 @@ _ASIA_CAPITALS = [
     "ULN",  # Ulaanbaatar, Mongolia
     "NQZ",  # Astana, Kazakhstan
     "TAS",  # Tashkent, Uzbekistan
-    "FRU",  # Bishkek, Kyrgyzstan
+    # FRU (Bishkek, Kyrgyzstan) removed -- Travelpayouts' /v2/prices/latest
+    # consistently 400s for this origin (confirmed repeatedly in practice, not
+    # transient), so every scrape wasted a call and a full traceback on a
+    # permanently-dead lookup instead of a real, retryable failure.
     "DYU",  # Dushanbe, Tajikistan
     "ASB",  # Ashgabat, Turkmenistan
     "GYD",  # Baku, Azerbaijan
