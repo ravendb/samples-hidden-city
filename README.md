@@ -71,7 +71,7 @@ wrapper is Windows-only for now (see below).
    1. `OPENAI_API_KEY` — required, the agent won't start without it ([platform.openai.com](https://platform.openai.com/))
    1. `TRAVELPAYOUTS_TOKEN` — optional; without it the agent falls back to fixture data seeded by `scripts/seed_local.py`
    1. The RavenDB license is picked up silently from `license.json` in the repo root if present, otherwise Local mode runs RavenDB in Developer Mode (3 GB / 1 node limit) and Kubernetes mode skips the license secret with a warning
-1. Once the agent is running, its landing page links to a `/setup` wizard (`http://localhost:8000/setup`) that walks through all three of `OPENAI_API_KEY`, `RAVENDB_LICENSE`, and `TRAVELPAYOUTS_TOKEN` in the browser and writes whichever you fill in to `.env` — the easiest way to add a key you skipped in the terminal, or to hand the demo to someone without shell access.
+1. Once the agent is running, its landing page links to a `/setup` wizard (`http://localhost:8001/setup`) that walks through all three of `OPENAI_API_KEY`, `RAVENDB_LICENSE`, and `TRAVELPAYOUTS_TOKEN` in the browser and writes whichever you fill in to `.env` — the easiest way to add a key you skipped in the terminal, or to hand the demo to someone without shell access.
 1. RavenDB Studio is available at `http://localhost:8080` (Local mode) or `https://localhost:8081` (Kubernetes mode — self-signed cert, browser will warn). Open the `Routes` collection to inspect enriched documents.
 
 ## Remarks

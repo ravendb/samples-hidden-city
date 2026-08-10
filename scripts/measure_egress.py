@@ -25,7 +25,7 @@ import httpx
 
 log = logging.getLogger(__name__)
 
-AGENT_URL = "http://localhost:8000"
+AGENT_URL = "http://localhost:8001"
 
 # Travelpayouts bulk response for a route search returns ~200-300 KB of flight data.
 # We use 250 KB (250,000 bytes) as the naive baseline.

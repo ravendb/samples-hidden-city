@@ -102,7 +102,7 @@ bash k8s/start-k8s.sh                    # macOS/Linux (or WSL2 on Windows): sam
 # Local dev (manual steps -- what start.ps1 -Mode Local automates)
 docker-compose up -d ravendb
 python -m scripts.seed_local          # seed airports + fixture routes
-uvicorn src.agent.app:app --reload    # start agent on :8000
+uvicorn src.agent.app:app --reload --port 8001    # start agent on :8001
 
 # Check operator + cluster state
 kubectl get ravendbclusters

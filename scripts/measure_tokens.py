@@ -17,7 +17,7 @@ import httpx
 
 log = logging.getLogger(__name__)
 
-AGENT_URL = "http://localhost:8000"
+AGENT_URL = "http://localhost:8001"
 NAIVE_BASELINE_TOKENS = 50_000  # conservative estimate for raw Travelpayouts bulk response
 
 TEST_QUERIES = [

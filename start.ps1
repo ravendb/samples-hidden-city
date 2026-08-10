@@ -252,8 +252,8 @@ if ($Worker) {
 }
 
 # --- last step: agent (foreground) ---
-Write-Step $totalSteps $totalSteps "Starting agent at http://localhost:8000  (Ctrl+C to stop)"
-Write-Host "  Swagger UI:    http://localhost:8000/docs" -ForegroundColor Gray
+Write-Step $totalSteps $totalSteps "Starting agent at http://localhost:8001  (Ctrl+C to stop)"
+Write-Host "  Swagger UI:    http://localhost:8001/docs" -ForegroundColor Gray
 Write-Host "  RavenDB Studio: http://localhost:8080" -ForegroundColor Gray
 Write-Host ""
 
@@ -262,7 +262,7 @@ Write-Host ""
 # stopped, which is exactly what silently conflicted with the Kubernetes mode's
 # own port-forward on 8080 earlier.
 try {
-    & $uvicorn src.agent.app:app --reload --port 8000
+    & $uvicorn src.agent.app:app --reload --port 8001
 } finally {
     Write-Host "`n  Stopping RavenDB (docker compose down) to release its ports..." -ForegroundColor Gray
     docker compose down

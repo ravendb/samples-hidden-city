@@ -20,7 +20,7 @@ spec:
           image: hidden-city:latest
           imagePullPolicy: IfNotPresent
           ports:
-            - containerPort: 8000
+            - containerPort: 8001
           envFrom:
             - configMapRef:
                 name: hidden-city-config
@@ -43,7 +43,7 @@ spec:
           livenessProbe:
             httpGet:
               path: /health
-              port: 8000
+              port: 8001
             # _startup() (app.py) runs the Travelpayouts bulk scraper synchronously
             # before uvicorn serves, one sequential API call per _FALLBACK_ORIGINS
             # entry (src/scraper/run.py) -- now ~80 national-capital airports across
@@ -58,7 +58,7 @@ spec:
           readinessProbe:
             httpGet:
               path: /health
-              port: 8000
+              port: 8001
             initialDelaySeconds: 5
             periodSeconds: 10
             failureThreshold: 120

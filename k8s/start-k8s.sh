@@ -177,7 +177,7 @@ preflight() {
   fi
 
   local port
-  for port in 8000 8081; do
+  for port in 8001 8081; do
     if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
       exec 3<&- 3>&-
       printf '    FAIL  Port %s already in use\n' "$port"; failed=true
@@ -774,7 +774,7 @@ echo ""
 echo "  Starting port-forwards..."
 first_node_tag=$(get_raven_node_tags | head -1)
 
-kubectl port-forward svc/agent-svc 8000:80 -n "$NS" >/dev/null 2>&1 &
+kubectl port-forward svc/agent-svc 8001:80 -n "$NS" >/dev/null 2>&1 &
 pf_agent=$!
 kubectl port-forward "svc/ravendb-$first_node_tag" 8081:443 -n "$NS" >/dev/null 2>&1 &
 pf_raven=$!
@@ -790,8 +790,8 @@ trap cleanup EXIT
 
 echo ""
 echo "  ============================================="
-ok "Agent:          http://localhost:8000"
-ok "Swagger UI:     http://localhost:8000/docs"
+ok "Agent:          http://localhost:8001"
+ok "Swagger UI:     http://localhost:8001/docs"
 ok "RavenDB Studio: https://localhost:8081  (self-signed cert -- browser will warn, click through)"
 echo "  ============================================="
 echo ""

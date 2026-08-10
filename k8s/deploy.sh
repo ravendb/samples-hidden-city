@@ -171,7 +171,7 @@ elif [[ -n "$INGRESS_HOST" ]]; then
 else
   warn "Ingress IP not assigned yet. Try:"
   warn "  kubectl get ingress -n $NS"
-  warn "  kubectl port-forward svc/agent-svc 8000:80 -n $NS"
+  warn "  kubectl port-forward svc/agent-svc 8001:80 -n $NS"
 fi
 
 RAVENDB_LB=$(kubectl get svc -n "$NS" \

@@ -253,7 +253,7 @@ function Invoke-Preflight {
     }
 
     # Ports this script's own port-forwards bind to at the end of a run.
-    foreach ($port in @(8000, 8081)) {
+    foreach ($port in @(8001, 8081)) {
         $inUse = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue
         $msg = "Port $port free"
         if ($inUse) { $msg = "Port $port already in use" }
@@ -950,7 +950,7 @@ Write-Host "`n  Starting port-forwards..." -ForegroundColor Gray
 $firstNodeTag = (Get-RavenNodeTags | Select-Object -First 1)
 
 $pfAgent = Start-Process kubectl `
-    -ArgumentList @("port-forward", "svc/agent-svc", "8000:80", "-n", $NS) `
+    -ArgumentList @("port-forward", "svc/agent-svc", "8001:80", "-n", $NS) `
     -PassThru -WindowStyle Hidden
 
 $pfRaven = Start-Process kubectl `
@@ -960,8 +960,8 @@ $pfRaven = Start-Process kubectl `
 # --- done ---
 Write-Host ""
 Write-Host "  =============================================" -ForegroundColor Green
-Write-Ok "Agent:          http://localhost:8000"
-Write-Ok "Swagger UI:     http://localhost:8000/docs"
+Write-Ok "Agent:          http://localhost:8001"
+Write-Ok "Swagger UI:     http://localhost:8001/docs"
 Write-Ok "RavenDB Studio: https://localhost:8081  (self-signed cert -- browser will warn, click through)"
 Write-Host "  =============================================" -ForegroundColor Green
 Write-Host ""

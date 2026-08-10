@@ -84,7 +84,7 @@ async def _startup() -> None:
     import asyncio
 
     host = os.getenv("HOST", "127.0.0.1")
-    port = os.getenv("PORT", "8000")
+    port = os.getenv("PORT", "8001")
     print("\n  Hidden City Flight Agent", flush=True)
     print("  DB       →  seeding check...", flush=True)
     # Not caught: ensure_database (called from seed_if_empty) already retries
