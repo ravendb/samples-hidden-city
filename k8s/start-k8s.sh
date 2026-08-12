@@ -601,8 +601,16 @@ declare -a raven_secret_defs=(
 for def in "${raven_secret_defs[@]}"; do
   IFS='|' read -r sec_name source_file from_file <<<"$def"
   if [[ ! -f "$source_file" ]]; then
-    warn "Skipping secret $sec_name -- source file missing: $source_file"
-    continue
+    # Was warn-and-skip: the RavenDB Helm install a few steps later
+    # references all four of these by name (spec.licenseSecretRef,
+    # certificate refs), so a silently-skipped secret here is guaranteed to
+    # resurface as a cryptic admission-webhook or cert-mount failure
+    # downstream. license.json's existence is already asserted in
+    # preflight(); the three cert files are asserted right after generation
+    # in ensure_ravendb_certs(). Reaching this branch means one disappeared
+    # between then and now -- fail loudly instead of producing a cluster
+    # that looks like it's coming up and isn't.
+    fail "can't create secret $sec_name -- source file missing: $source_file"
   fi
   kubectl create secret generic "$sec_name" -n "$NS" "--from-file=${from_file}=${source_file}" --dry-run=client -o yaml |
     kubectl apply -f - >/dev/null

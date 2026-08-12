@@ -298,9 +298,14 @@ function Invoke-Preflight {
     # those are two independent, unsynchronized representations of the license,
     # see Ensure-RavenDbCerts's caller below). Checking it here means the whole
     # run fails in seconds, before Docker/kind/cert work even starts.
+    $licenseJsonOk = Test-Path "$root\license.json"
     $checks += @{
-        Ok  = (Test-Path "$root\license.json")
-        Msg = "license.json present at repo root (required for the ravendb-license k8s Secret)"
+        Ok  = $licenseJsonOk
+        Msg = if ($licenseJsonOk) {
+            "license.json present at repo root"
+        } else {
+            "license.json missing at repo root (required for the ravendb-license k8s Secret)"
+        }
     }
 
     Write-Host "`n  Preflight:" -ForegroundColor Cyan
@@ -793,8 +798,19 @@ $ravenSecrets = @(
 )
 foreach ($s in $ravenSecrets) {
     if (-not (Test-Path $s.SourceFile)) {
-        Write-Warn "Skipping secret $($s.Name) -- source file missing: $($s.SourceFile)"
-        continue
+        # Was warn-and-skip: the RavenDB Helm install a few steps later
+        # references all four of these by name (spec.licenseSecretRef,
+        # certificate refs), so a silently-skipped secret here is guaranteed
+        # to resurface as a cryptic admission-webhook or cert-mount failure
+        # downstream -- the exact same "existence, not capability" shape as
+        # the license.json and openssl bugs above. license.json's existence
+        # is already asserted in Invoke-Preflight; the three cert files are
+        # asserted right after generation in Ensure-RavenDbCerts. Reaching
+        # this branch means one disappeared between then and now (or a real
+        # bug in this script) -- either way, fail loudly here instead of
+        # producing a cluster that looks like it's coming up and isn't.
+        Write-Host "  ERROR: can't create secret $($s.Name) -- source file missing: $($s.SourceFile)" -ForegroundColor Red
+        exit 1
     }
     $fromFileArg = "--from-file=$($s.FromFile)=$($s.SourceFile)"
     $yaml = kubectl create secret generic $s.Name -n $NS $fromFileArg --dry-run=client -o yaml
