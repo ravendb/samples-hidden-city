@@ -402,8 +402,24 @@ ensure_ravendb_certs() {
   # conflict that broke -legacy on Windows (see start-k8s.ps1's
   # Resolve-OpenSslExe) -- still probe it for a fast, clear failure if a
   # minimal container image lacks the legacy provider.
-  openssl list -providers -legacy 2>&1 | grep -qi legacy ||
-    fail "openssl's 'legacy' provider failed to load (needed for PKCS12 export) -- install a full openssl package."
+  #
+  # This runs the REAL operation (a throwaway `pkcs12 -export -legacy`) as
+  # the probe, not a proxy check. `openssl list -providers -legacy` looks
+  # like a capability check but isn't valid input for every build's `list`
+  # subcommand even when the legacy provider itself loads and works fine --
+  # confirmed for real on FireDaemon OpenSSL 4.0.1 (Windows side): `list
+  # -providers -legacy` fails with "Unknown option: -legacy" while `pkcs12
+  # -export -legacy` (the actual command used below) succeeds outright on
+  # that same install. Test the thing you actually need, not a stand-in.
+  _legacy_probe_dir="$(mktemp -d)"
+  openssl req -x509 -newkey rsa:2048 -keyout "$_legacy_probe_dir/k.key" \
+    -out "$_legacy_probe_dir/k.crt" -days 1 -nodes -subj "/CN=legacy-probe" >/dev/null 2>&1
+  openssl pkcs12 -export -legacy -out "$_legacy_probe_dir/k.pfx" \
+    -inkey "$_legacy_probe_dir/k.key" -in "$_legacy_probe_dir/k.crt" -passout pass: >/dev/null 2>&1
+  _legacy_ok=$?
+  rm -rf "$_legacy_probe_dir"
+  [[ $_legacy_ok -eq 0 ]] ||
+    fail "openssl can't do a -legacy PKCS12 export (needed for the operator's cert format) -- install a full openssl package with the legacy provider."
 
   mkdir -p "$certs_dir"
   echo "  Generating self-signed RavenDB TLS chain in k8s/ravendb/certs..."
