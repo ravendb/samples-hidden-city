@@ -24,6 +24,8 @@ from src.db.seed import seed_if_empty
 from src.tools.get_user_profile import DEFAULT_PREFERENCES, build_preferences
 from src.tools.get_user_profile import get_user_profile as _get_user_profile
 from src.tools.save_conversation import persist_turn
+from src.tools.openai_status import is_valid as _openai_key_is_valid
+from src.tools.openai_status import set_valid as _set_openai_key_valid
 from src.tools.travelpayouts_status import is_valid as _travelpayouts_token_is_valid
 from src.tools.travelpayouts_status import set_valid as _set_travelpayouts_token_valid
 from src.tools.update_user_profile import update_user_profile as _update_user_profile
@@ -98,6 +100,19 @@ async def _startup() -> None:
     # practice), since /health doesn't check DB connectivity.
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, seed_if_empty)
+
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if _is_key_configured("OPENAI_API_KEY"):
+        from src.agent.loop import validate_openai_key
+
+        openai_key_ok = await validate_openai_key(openai_key)
+        _set_openai_key_valid(openai_key_ok)
+        if not openai_key_ok:
+            print("  OpenAI     → key rejected (401 Unauthorized) — chat will fail until fixed.", flush=True)
+            print("  OpenAI     → fix OPENAI_API_KEY in Profile → API keys & tokens, or in .env.", flush=True)
+    else:
+        _set_openai_key_valid(None)
+        print("  OpenAI     → OPENAI_API_KEY not set — chat will fail until configured.", flush=True)
 
     token = os.getenv("TRAVELPAYOUTS_TOKEN")
     if token:
@@ -233,6 +248,7 @@ async def api_setup_status() -> dict:
     """Report which setup keys are already configured, so the wizard can skip them."""
     return {
         "openai_api_key_set": _is_key_configured("OPENAI_API_KEY"),
+        "openai_api_key_valid": _openai_key_is_valid(),
         "ravendb_license_set": bool(os.getenv("RAVENDB_LICENSE")) or _LICENSE_FILE.exists(),
         "travelpayouts_set": _is_key_configured("TRAVELPAYOUTS_TOKEN"),
         "travelpayouts_valid": _travelpayouts_token_is_valid(),
@@ -256,8 +272,17 @@ def _set_env_value(key: str, value: str) -> None:
 async def api_setup(body: SetupRequest) -> dict:
     """Persist API keys to .env (repo root, never committed — in .gitignore)."""
     if body.openai_api_key:
+        from src.agent.loop import validate_openai_key
+
+        if not await validate_openai_key(body.openai_api_key):
+            raise HTTPException(
+                status_code=400,
+                detail="OpenAI API key rejected (401 Unauthorized) — "
+                "check the value at platform.openai.com → API keys.",
+            )
         _set_env_value("OPENAI_API_KEY", body.openai_api_key)
         os.environ["OPENAI_API_KEY"] = body.openai_api_key
+        _set_openai_key_valid(True)
 
     if body.ravendb_license:
         _set_env_value("RAVENDB_LICENSE", body.ravendb_license)

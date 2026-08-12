@@ -288,6 +288,21 @@ function Invoke-Preflight {
         Msg = "k8s/kind-config.yaml node image matches versions.env KIND_NODE_IMAGE"
     }
 
+    # Checked here, not just later when the ravendb-license k8s Secret gets
+    # created from this file: the RavenDB operator's admission webhook always
+    # requires spec.licenseSecretRef to resolve, so a missing license.json is
+    # guaranteed to fail eventually. Was found deep in the script's own
+    # secrets/certs step (well past the point where a stale, already-cached
+    # RAVENDB_LICENSE value in k8s/secrets.local.yaml can make "OK: RAVENDB_LICENSE
+    # already set" print even though this file no longer exists on disk --
+    # those are two independent, unsynchronized representations of the license,
+    # see Ensure-RavenDbCerts's caller below). Checking it here means the whole
+    # run fails in seconds, before Docker/kind/cert work even starts.
+    $checks += @{
+        Ok  = (Test-Path "$root\license.json")
+        Msg = "license.json present at repo root (required for the ravendb-license k8s Secret)"
+    }
+
     Write-Host "`n  Preflight:" -ForegroundColor Cyan
     $failed = $false
     foreach ($c in $checks) {
@@ -659,10 +674,8 @@ $ravenCertsDir = "$root\k8s\ravendb\certs"
 $ravenNodeTags = Get-RavenNodeTags
 Ensure-RavenDbCerts -CertsDir $ravenCertsDir -NodeTags $ravenNodeTags
 
-if (-not (Test-Path "$root\license.json")) {
-    Write-Warn "license.json not found at repo root -- the ravendb-license Secret can't be created."
-    Write-Warn "Save your RavenDB license JSON to license.json in the repo root and re-run."
-}
+# license.json's presence is already asserted in Invoke-Preflight, at the very
+# start of the run -- no need to re-check it here.
 
 # --- kind cluster ---
 $step++

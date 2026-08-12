@@ -218,6 +218,20 @@ preflight() {
     printf '    FAIL  k8s/kind-config.yaml node image (%s) does not match versions.env KIND_NODE_IMAGE\n' "$kind_img"; failed=true
   fi
 
+  # Checked here, not just later when the ravendb-license k8s Secret gets
+  # created from this file: the RavenDB operator's admission webhook always
+  # requires spec.licenseSecretRef to resolve, so a missing license.json is
+  # guaranteed to fail eventually. A stale, already-cached RAVENDB_LICENSE
+  # value in k8s/secrets.local.yaml can make "already set" print even though
+  # this file no longer exists on disk -- those are two independent,
+  # unsynchronized representations of the license. Checking it here means the
+  # whole run fails in seconds, before Docker/kind/cert work even starts.
+  if [[ -f "$root/license.json" ]]; then
+    printf '    OK    license.json present at repo root (required for the ravendb-license k8s Secret)\n'
+  else
+    printf '    FAIL  license.json missing at repo root (required for the ravendb-license k8s Secret)\n'; failed=true
+  fi
+
   printf '\n'
   [[ "$failed" == "true" ]] && fail "preflight failed -- fix the above before continuing."
   return 0
@@ -499,10 +513,8 @@ raven_node_tags=()
 while IFS= read -r tag; do raven_node_tags+=("$tag"); done < <(get_raven_node_tags)
 ensure_ravendb_certs "$raven_certs_dir" "${raven_node_tags[@]}"
 
-if [[ ! -f "$root/license.json" ]]; then
-  warn "license.json not found at repo root -- the ravendb-license Secret can't be created."
-  warn "Save your RavenDB license JSON to license.json in the repo root and re-run."
-fi
+# license.json's presence is already asserted in preflight(), at the very
+# start of the run -- no need to re-check it here.
 
 # --- kind cluster ---
 step "kind cluster '$CLUSTER_NAME'"
