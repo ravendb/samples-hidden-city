@@ -641,8 +641,17 @@ if [[ "$SKIP_OPERATOR" != "true" ]]; then
 
   echo "  Installing ingress-nginx (kind provider)..."
   kubectl apply -f "$INGRESS_NGINX_URL"
+  # 300s, not 120s: on a freshly-created kind node (e.g. right after
+  # --delete-cluster), containerd has nothing cached -- every image (Calico,
+  # cert-manager, this controller, its webhook cert-gen job) pulls from
+  # scratch. Confirmed hitting the 120s ceiling for real on a cold cluster:
+  # `kubectl describe pod` showed the image pull alone took 2m0.48s -- 0.48s
+  # over the old timeout, plus repeated FailedMount retries on the
+  # webhook-cert secret while the admission Jobs were still creating it
+  # (expected, self-resolving). Not a config or probe problem, just not
+  # enough runway for a cold pull.
   kubectl wait --namespace ingress-nginx --for=condition=ready pod \
-    --selector=app.kubernetes.io/component=controller --timeout=120s ||
+    --selector=app.kubernetes.io/component=controller --timeout=300s ||
     fail "ingress-nginx controller pod did not become ready in time."
   ok "ingress-nginx ready"
 
