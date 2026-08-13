@@ -2,9 +2,11 @@
 FastAPI entrypoint.
 Session loading/saving happens here; the loop itself is stateless.
 """
+import asyncio
 import logging
 import os
 import tempfile
+import threading
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -64,15 +66,23 @@ def _is_reload_restart() -> bool:
     return False
 
 
-async def _run_scraper_background() -> None:
-    """Runs the full Travelpayouts scrape without blocking _startup() / uvicorn's
-    readiness -- see the call site in _startup() for why this must not be awaited
-    there. Errors are logged here since a background task's exception never
-    propagates to anything that would otherwise print/log it."""
+def _run_scraper_background() -> None:
+    """Runs the full Travelpayouts scrape on its own thread with its own event
+    loop, fully isolated from uvicorn's main loop -- see the call site in
+    _startup() for why. asyncio.create_task() alone was NOT enough: this
+    coroutine calls put_document() (src/db/client.py) synchronously for every
+    route via the (non-async) ravendb client, interleaved with the async
+    httpx calls -- confirmed for real that those synchronous writes
+    monopolize the main event loop badly enough that uvicorn's own
+    "Application startup complete" logging was delayed until the scrape
+    finished anyway, identical to the original blocking-await bug it was
+    meant to fix (same millisecond in the logs, on two separate pods). A
+    dedicated thread + its own loop can't be starved by anything happening on
+    the main loop, regardless of what mix of sync/async work runs inside."""
     try:
         from src.scraper.run import run as _run_scraper
 
-        await _run_scraper()
+        asyncio.run(_run_scraper())
     except Exception as _e:
         print(f"  Travelpayouts → failed: {_e}", flush=True)
         log.exception("Travelpayouts fetch failed at startup")
@@ -84,8 +94,6 @@ async def _print_links_after_startup(host: str, port: str) -> None:
     synchronously right after the startup event handler returns, before the
     loop gets back around to this task) -- so the links land at the bottom,
     not buried under seeding/Travelpayouts scrape output further up."""
-    import asyncio
-
     await asyncio.sleep(0.1)
     ravendb_url = os.getenv("RAVENDB_URL", "http://localhost:8080")
     print("\n  ── Links ──", flush=True)
@@ -97,8 +105,6 @@ async def _print_links_after_startup(host: str, port: str) -> None:
 
 @app.on_event("startup")
 async def _startup() -> None:
-    import asyncio
-
     host = os.getenv("HOST", "127.0.0.1")
     port = os.getenv("PORT", "8001")
     print("\n  Hidden City Flight Agent", flush=True)
@@ -140,19 +146,29 @@ async def _startup() -> None:
         elif _is_reload_restart():
             print("  Travelpayouts → skipping full scrape (--reload restart, already scraped this session)", flush=True)
         else:
-            # Backgrounded, not awaited: this scrape is sequential over
-            # ~80 origins (src/scraper/run.py) and easily runs 10+ minutes.
-            # Awaiting it here used to block uvicorn from ever answering
-            # /health until it finished -- with k8s/agent/deployment.yaml's
-            # replicas: 2, two fresh pods hit Travelpayouts with the same
-            # scrape at once on every cold start (the _is_reload_restart()
-            # guard above is a local-process PPID marker that never matches
-            # in a fresh pod), which is exactly what pushed a real rollout
-            # past its ~20min readiness/progress-deadline budget (confirmed
-            # hitting this for real, not hypothetical). The scrape still
-            # writes the same data to RavenDB either way -- only *when the
-            # pod is allowed to answer /health* changes, not what happens.
-            asyncio.create_task(_run_scraper_background())
+            # Run on a separate thread, not just asyncio.create_task() on
+            # this loop: this scrape is sequential over ~80 origins
+            # (src/scraper/run.py), easily runs 10+ minutes, and mixes async
+            # httpx calls with SYNCHRONOUS RavenDB writes (put_document,
+            # src/db/client.py -- the ravendb client has no async API). A
+            # plain create_task() still let those synchronous writes
+            # monopolize this event loop badly enough that uvicorn's own
+            # "Application startup complete" was delayed until the scrape
+            # finished anyway -- confirmed for real (identical millisecond
+            # in the logs on two separate pods), the same symptom as the
+            # original blocking-await bug it was meant to fix. A dedicated
+            # thread with its own event loop (asyncio.run() inside
+            # _run_scraper_background) can't be starved by anything on the
+            # main loop no matter what it does internally. With
+            # k8s/agent/deployment.yaml's replicas: 2, two fresh pods used
+            # to hit Travelpayouts with the same scrape at once on every
+            # cold start (the _is_reload_restart() guard above is a
+            # local-process PPID marker that never matches in a fresh pod),
+            # which is what pushed a real rollout past its progress
+            # deadline. The scrape still writes the same data to RavenDB
+            # either way -- only *when the pod is allowed to answer
+            # /health* changes, not what happens.
+            threading.Thread(target=_run_scraper_background, daemon=True).start()
     else:
         _set_travelpayouts_token_valid(None)
         print("  Travelpayouts → TRAVELPAYOUTS_TOKEN not set, skipping", flush=True)
