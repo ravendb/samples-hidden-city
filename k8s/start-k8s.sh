@@ -804,15 +804,15 @@ if [[ "$image_rebuilt" == "true" ]]; then
   kubectl rollout restart deployment/subscription-worker -n "$NS" >/dev/null
 fi
 
-# 1200s, not 120s: k8s/agent/deployment.yaml's own readiness/liveness probes
-# already budget ~20 minutes for this exact case (its own comment: "_startup()
-# runs the Travelpayouts bulk scraper synchronously before uvicorn serves...
-# cold start is easily 10+ minutes"). This step's timeout used to be far
-# shorter than what the pod itself is configured to tolerate -- harmless
-# before database creation reliably succeeded (a failed, swallowed seed made
-# startup fast, for the wrong reason), but a real bottleneck now that it does.
-step "Waiting for agent deployment (up to ~20 min on a cold DB -- see k8s/agent/deployment.yaml)"
-kubectl rollout status deployment/agent -n "$NS" --timeout=1200s || fail "agent deployment did not roll out in time."
+# 180s: the Travelpayouts bulk scraper no longer blocks readiness (it runs as
+# a background task in _startup() -- see app.py) -- what's left gating it is
+# ensure_database's own retry budget (up to 90s) plus two quick API
+# validation calls. This used to be 1200s to match the scraper blocking
+# startup for ~20 min; confirmed hitting that ceiling for real on a cold,
+# 2-replica rollout before the background-task fix (both pods scraping ~80
+# origins concurrently, pushing past even that generous allowance).
+step "Waiting for agent deployment (up to ~3 min on a cold DB -- see k8s/agent/deployment.yaml)"
+kubectl rollout status deployment/agent -n "$NS" --timeout=180s || fail "agent deployment did not roll out in time."
 ok "Agent deployment ready"
 
 # --- port-forwards (skipped for --no-wait / CI: readiness above is the signal) ---

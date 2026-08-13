@@ -64,6 +64,20 @@ def _is_reload_restart() -> bool:
     return False
 
 
+async def _run_scraper_background() -> None:
+    """Runs the full Travelpayouts scrape without blocking _startup() / uvicorn's
+    readiness -- see the call site in _startup() for why this must not be awaited
+    there. Errors are logged here since a background task's exception never
+    propagates to anything that would otherwise print/log it."""
+    try:
+        from src.scraper.run import run as _run_scraper
+
+        await _run_scraper()
+    except Exception as _e:
+        print(f"  Travelpayouts → failed: {_e}", flush=True)
+        log.exception("Travelpayouts fetch failed at startup")
+
+
 async def _print_links_after_startup(host: str, port: str) -> None:
     """Fires one event-loop tick after this coroutine is scheduled, which is
     after uvicorn logs "Application startup complete." (it logs that line
@@ -126,12 +140,19 @@ async def _startup() -> None:
         elif _is_reload_restart():
             print("  Travelpayouts → skipping full scrape (--reload restart, already scraped this session)", flush=True)
         else:
-            try:
-                from src.scraper.run import run as _run_scraper
-                await _run_scraper()
-            except Exception as _e:
-                print(f"  Travelpayouts → failed: {_e}", flush=True)
-                log.exception("Travelpayouts fetch failed at startup")
+            # Backgrounded, not awaited: this scrape is sequential over
+            # ~80 origins (src/scraper/run.py) and easily runs 10+ minutes.
+            # Awaiting it here used to block uvicorn from ever answering
+            # /health until it finished -- with k8s/agent/deployment.yaml's
+            # replicas: 2, two fresh pods hit Travelpayouts with the same
+            # scrape at once on every cold start (the _is_reload_restart()
+            # guard above is a local-process PPID marker that never matches
+            # in a fresh pod), which is exactly what pushed a real rollout
+            # past its ~20min readiness/progress-deadline budget (confirmed
+            # hitting this for real, not hypothetical). The scrape still
+            # writes the same data to RavenDB either way -- only *when the
+            # pod is allowed to answer /health* changes, not what happens.
+            asyncio.create_task(_run_scraper_background())
     else:
         _set_travelpayouts_token_valid(None)
         print("  Travelpayouts → TRAVELPAYOUTS_TOKEN not set, skipping", flush=True)

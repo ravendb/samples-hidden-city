@@ -44,24 +44,25 @@ spec:
             httpGet:
               path: /health
               port: 8001
-            # _startup() (app.py) runs the Travelpayouts bulk scraper synchronously
-            # before uvicorn serves, one sequential API call per _FALLBACK_ORIGINS
-            # entry (src/scraper/run.py) -- now ~80 national-capital airports across
-            # Europe/Asia/US instead of the original 6, so cold start is easily
-            # 10+ minutes. failureThreshold*periodSeconds must outlast that or
-            # kubelet kills the pod mid-startup on every boot -- this is a rough
-            # allowance, verify against an actual rollout and adjust if it still
-            # gets killed before "Application startup complete" appears in the logs.
+            # _startup() (app.py) no longer awaits the Travelpayouts bulk scraper --
+            # it's fired as a background task (_run_scraper_background) precisely so
+            # uvicorn can start answering /health without waiting on it. What's left
+            # gating readiness is ensure_database's own retry budget (src/db/seed.py,
+            # up to 90s if RavenDB isn't reachable yet) plus two quick API validation
+            # calls (OpenAI, Travelpayouts). This budget was previously ~20 minutes,
+            # sized for the scraper blocking startup -- confirmed hitting that ceiling
+            # for real on a cold, 2-replica rollout (both pods scraping ~80 origins
+            # concurrently). No longer needed now that the scrape doesn't gate /health.
             initialDelaySeconds: 10
-            periodSeconds: 30
-            failureThreshold: 40
+            periodSeconds: 15
+            failureThreshold: 16
           readinessProbe:
             httpGet:
               path: /health
               port: 8001
             initialDelaySeconds: 5
-            periodSeconds: 10
-            failureThreshold: 120
+            periodSeconds: 5
+            failureThreshold: 24
       volumes:
         - name: ravendb-client-cert
           secret:
