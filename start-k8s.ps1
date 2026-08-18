@@ -476,27 +476,43 @@ x509_extensions = ext
 [ext]
 basicConstraints = critical, CA:TRUE
 keyUsage = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
 "@ | Set-Content "$CertsDir\ca-ext.cnf" -Encoding utf8
 
+    # Two extension sections: req_ext (no AKI -- used while generating the CSR,
+    # before any CA is in scope) and sign_ext (adds authorityKeyIdentifier --
+    # used only when x509 signs the CSR, where -CA/-CAkey give it something to
+    # point at). Folding authorityKeyIdentifier into the section req_extensions
+    # references makes `openssl req -new` itself fail ("no issuer certificate"),
+    # since req has no -CA at that point -- confirmed reproducing it locally.
     @"
 [req]
 distinguished_name = dn
-req_extensions = ext
+req_extensions = req_ext
 [dn]
-[ext]
+[req_ext]
 subjectAltName = $sanEntries
 keyUsage = critical, digitalSignature, keyEncipherment
 extendedKeyUsage = serverAuth, clientAuth
+[sign_ext]
+subjectAltName = $sanEntries
+keyUsage = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth, clientAuth
+authorityKeyIdentifier = keyid,issuer
 "@ | Set-Content "$CertsDir\server-san.cnf" -Encoding utf8
 
     @"
 [req]
 distinguished_name = dn
-req_extensions = ext
+req_extensions = req_ext
 [dn]
-[ext]
+[req_ext]
 keyUsage = critical, digitalSignature, keyEncipherment
 extendedKeyUsage = clientAuth
+[sign_ext]
+keyUsage = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = clientAuth
+authorityKeyIdentifier = keyid,issuer
 "@ | Set-Content "$CertsDir\client-ext.cnf" -Encoding utf8
 
     # CA
@@ -511,7 +527,7 @@ extendedKeyUsage = clientAuth
         -subj "/CN=$($NodeTags[0]).hiddencity.local" -config "$CertsDir\server-san.cnf"
     & $openssl x509 -req -in "$CertsDir\server.csr" -CA "$CertsDir\ca.crt" -CAkey "$CertsDir\ca.key" `
         -CAcreateserial -out "$CertsDir\server.crt" -days 825 -sha256 `
-        -extfile "$CertsDir\server-san.cnf" -extensions ext
+        -extfile "$CertsDir\server-san.cnf" -extensions sign_ext
 
     # Client
     & $openssl genrsa -out "$CertsDir\client.key" 2048 2>$null
@@ -519,7 +535,7 @@ extendedKeyUsage = clientAuth
         -subj "/CN=hidden-city-client" -config "$CertsDir\client-ext.cnf"
     & $openssl x509 -req -in "$CertsDir\client.csr" -CA "$CertsDir\ca.crt" -CAkey "$CertsDir\ca.key" `
         -CAcreateserial -out "$CertsDir\client.crt" -days 825 -sha256 `
-        -extfile "$CertsDir\client-ext.cnf" -extensions ext
+        -extfile "$CertsDir\client-ext.cnf" -extensions sign_ext
 
     # Legacy-encoding PKCS12 -- required by the operator, see function comment above
     & $openssl pkcs12 -export -legacy -out "$CertsDir\server.pfx" `

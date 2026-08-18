@@ -452,27 +452,43 @@ x509_extensions = ext
 [ext]
 basicConstraints = critical, CA:TRUE
 keyUsage = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
 EOF
 
+  # Two extension sections: req_ext (no AKI -- used while generating the CSR,
+  # before any CA is in scope) and sign_ext (adds authorityKeyIdentifier --
+  # used only when x509 signs the CSR, where -CA/-CAkey give it something to
+  # point at). Folding authorityKeyIdentifier into the section req_extensions
+  # references makes `openssl req -new` itself fail ("no issuer certificate"),
+  # since req has no -CA at that point -- confirmed reproducing it locally.
   cat > "$certs_dir/server-san.cnf" <<EOF
 [req]
 distinguished_name = dn
-req_extensions = ext
+req_extensions = req_ext
 [dn]
-[ext]
+[req_ext]
 subjectAltName = $san_entries
 keyUsage = critical, digitalSignature, keyEncipherment
 extendedKeyUsage = serverAuth, clientAuth
+[sign_ext]
+subjectAltName = $san_entries
+keyUsage = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth, clientAuth
+authorityKeyIdentifier = keyid,issuer
 EOF
 
   cat > "$certs_dir/client-ext.cnf" <<EOF
 [req]
 distinguished_name = dn
-req_extensions = ext
+req_extensions = req_ext
 [dn]
-[ext]
+[req_ext]
 keyUsage = critical, digitalSignature, keyEncipherment
 extendedKeyUsage = clientAuth
+[sign_ext]
+keyUsage = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = clientAuth
+authorityKeyIdentifier = keyid,issuer
 EOF
 
   openssl genrsa -out "$certs_dir/ca.key" 4096 2>/dev/null
@@ -485,14 +501,14 @@ EOF
     -subj "/CN=${node_tags[0]}.hiddencity.local" -config "$certs_dir/server-san.cnf"
   openssl x509 -req -in "$certs_dir/server.csr" -CA "$certs_dir/ca.crt" -CAkey "$certs_dir/ca.key" \
     -CAcreateserial -out "$certs_dir/server.crt" -days 825 -sha256 \
-    -extfile "$certs_dir/server-san.cnf" -extensions ext
+    -extfile "$certs_dir/server-san.cnf" -extensions sign_ext
 
   openssl genrsa -out "$certs_dir/client.key" 2048 2>/dev/null
   openssl req -new -key "$certs_dir/client.key" -out "$certs_dir/client.csr" \
     -subj "/CN=hidden-city-client" -config "$certs_dir/client-ext.cnf"
   openssl x509 -req -in "$certs_dir/client.csr" -CA "$certs_dir/ca.crt" -CAkey "$certs_dir/ca.key" \
     -CAcreateserial -out "$certs_dir/client.crt" -days 825 -sha256 \
-    -extfile "$certs_dir/client-ext.cnf" -extensions ext
+    -extfile "$certs_dir/client-ext.cnf" -extensions sign_ext
 
   openssl pkcs12 -export -legacy -out "$certs_dir/server.pfx" \
     -inkey "$certs_dir/server.key" -in "$certs_dir/server.crt" \
