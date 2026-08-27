@@ -529,9 +529,9 @@ async def metrics() -> dict:
         "budget": {
             "system_prompt_tokens": 200,
             "user_message_tokens": 100,
-            "tool_results_tokens": 800,
+            "tool_results_tokens": 1800,
             "response_tokens": 400,
-            "total_tokens": 1500,
+            "total_tokens": 2500,
         },
         "naive_baseline_tokens": "40000-100000",
     }

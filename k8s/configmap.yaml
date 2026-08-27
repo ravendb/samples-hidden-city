@@ -21,4 +21,4 @@ data:
   RAVENDB_CLIENT_CERT_PATH: "/certs/client/client.pfx"
   RAVENDB_CA_CERT_PATH: "/certs/ca/ca.crt"
   LLM_MODEL: "gpt-4o-mini"
-  MAX_TOKENS_BUDGET: "1500"
+  MAX_TOKENS_BUDGET: "2500"

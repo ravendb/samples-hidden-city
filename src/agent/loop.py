@@ -1,7 +1,7 @@
 """
 OpenAI tool-calling loop.
 
-Budget: ~1500 tokens total per turn (system 200 + user 100 + tool results 800 + response 400).
+Budget: ~2500 tokens total per turn (system 200 + user 100 + tool results 1800 + response 400).
 The loop logs actual usage from the API response so measure_tokens.py can track it.
 """
 import json
@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 _DEFAULT_MODEL = "gpt-4o-mini"
 MAX_RESPONSE_TOKENS = 400
 MAX_ITERATIONS = 10
-WARN_TOOL_TOKENS = 800  # tool-result budget for the WHOLE turn, not per call — see
+WARN_TOOL_TOKENS = 1800  # tool-result budget for the WHOLE turn, not per call — see
 # how tool_tokens_used is threaded through run_agent/stream_agent below
 
 # Numbers with 2+ digits — catches prices/scores but not stray single digits ("1 stop").

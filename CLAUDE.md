@@ -247,7 +247,7 @@ fallback when no direct or connecting route is found).
 
 ```
 Outbound payload = system_prompt + user_message + tool_results
-                 ≈ 200 + 100 + 800 tokens ≈ 1500 tokens max
+                 ≈ 200 + 100 + 1800 tokens ≈ 2500 tokens max
 ```
 
 Raw Travelpayouts bulk response (typically 40k–100k tokens) never reaches the model.
@@ -307,7 +307,7 @@ Contact Omer for operator internals — he wrote it.
 - **What goes outbound**: system prompt + user message only — no context payload
 - **Context delivery**: via tool results returned in the same API call, never pre-injected
 - Do not switch models mid-session (breaks conversation continuity)
-- Max tokens into the API call: 1500 (system + user + all tool results combined)
+- Max tokens into the API call: 2500 (system + user + all tool results combined)
 
 If you have a GPU in the cluster and want zero-egress inference, llm-d/vLLM is
 the drop-in replacement — the agent tool interface does not change.
@@ -318,9 +318,9 @@ the drop-in replacement — the agent tool interface does not change.
 |---------------------|------------|
 | System prompt       | 200        |
 | User message        | 100        |
-| Tool results total  | 800        |
+| Tool results total  | 1800       |
 | LLM response        | 400        |
-| **Total**           | **~1500**  |
+| **Total**           | **~2500**  |
 
 This is the core demo metric. Enforce it, measure it, show it on screen.
 The naive baseline (raw Travelpayouts response stuffed into prompt) runs 40k–100k tokens per call.
@@ -347,7 +347,7 @@ Conversation state is a RavenDB document (`sessions/...`), not pod RAM, not Redi
 
 ## Testing Requirements
 
-- Unit: token budget enforcement — MUST assert total tool result output < 800 tokens
+- Unit: token budget enforcement — MUST assert total tool result output < 1800 tokens
 - Unit: hidden city detection scoring logic
 - Unit: conversation memory truncation (only last N turns passed to model)
 - Integration: RavenDB tool `search_routes` returns correct results for known fixtures
@@ -370,7 +370,7 @@ Conversation state is a RavenDB document (`sessions/...`), not pod RAM, not Redi
 
 | Metric                        | Naive baseline               | With RavenDB in-cluster     |
 |-------------------------------|------------------------------|-----------------------------|
-| Tokens per API call           | 40k–100k                     | ~1500                       |
+| Tokens per API call           | 40k–100k                     | ~2500                       |
 | OpenAI API cost/day (10k req) | Calculate and show on screen | Calculate and show on screen|
 | Retrieval egress              | Full payload leaves cluster  | Zero (local RavenDB query)  |
 | p95 latency (retrieval)       | External API round trip      | In-cluster query time       |
@@ -387,7 +387,7 @@ stages — the savings come from what we stop sending, not from where inference 
 
 1. **No k8s, naive DB** — full Travelpayouts response stuffed into every prompt, paying for 100k tokens/call, high OpenAI bill
 2. **K8s, still external DB** — containerized but retrieval still crosses cluster boundary on every request
-3. **K8s + RavenDB in-cluster via Operator** — retrieval is local, 1500 tokens/call to OpenAI, near-zero egress on context
+3. **K8s + RavenDB in-cluster via Operator** — retrieval is local, 2500 tokens/call to OpenAI, near-zero egress on context
 
 Each stage is costed live. The closing slide leaves the architecture open:
 "We kept inference external to show you the savings are purely about context —

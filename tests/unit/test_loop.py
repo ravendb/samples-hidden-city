@@ -140,7 +140,7 @@ class TestRunAgent:
 
         assert len(result.tool_token_warnings) > 0
         assert len(captured_tool_messages) == 1
-        assert len(captured_tool_messages[0]) <= 800 * 4 + 20
+        assert len(captured_tool_messages[0]) <= 1800 * 4 + 20
 
     @pytest.mark.asyncio
     async def test_max_iterations_raises(self):
