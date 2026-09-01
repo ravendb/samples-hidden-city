@@ -16,7 +16,24 @@ def _pfx_to_pem(pfx_path: str, pem_path: str) -> str:
     if os.path.exists(pem_path):
         return pem_path
     with open(pfx_path, "rb") as f:
-        private_key, certificate, _ = pkcs12.load_key_and_certificates(f.read(), b"")
+        pfx_bytes = f.read()
+    try:
+        private_key, certificate, _ = pkcs12.load_key_and_certificates(pfx_bytes, b"")
+    except Exception as e:
+        # This file was generated with openssl's `-legacy` flag (3DES/RC2
+        # encryption -- see Ensure-RavenDbCerts in start-k8s.ps1) because the
+        # operator can't read openssl 3.x's SHA-256 PKCS12 default. Assuming
+        # `cryptography` can always read that back is the same "existence,
+        # not capability" mistake the openssl -legacy provider bug was: some
+        # wheels/OpenSSL backings don't support legacy-encrypted PKCS12.
+        # Surface that plainly instead of the raw parse exception.
+        raise RuntimeError(
+            f"cryptography couldn't parse the legacy-encrypted PKCS12 file at {pfx_path!r}: {e}. "
+            "This usually means the installed `cryptography` package's OpenSSL backing lacks "
+            "legacy-provider support. Try `uv sync --upgrade cryptography`, or confirm with "
+            "`python -c \"from cryptography.hazmat.backends.openssl.backend import backend; "
+            "print(backend.openssl_version_text())\"`."
+        ) from e
     with open(pem_path, "wb") as f:
         f.write(private_key.private_bytes(Encoding.PEM, PrivateFormat.TraditionalOpenSSL, NoEncryption()))
         f.write(certificate.public_bytes(Encoding.PEM))

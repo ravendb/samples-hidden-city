@@ -86,8 +86,29 @@ function Find-Uv {
     return $null
 }
 
+# Existence alone doesn't mean it's the version this repo is pinned to -- the
+# same "existence, not capability" bug class as Resolve-OpenSslExe's PATH
+# fallback and the license.json staleness issue in start-k8s.ps1. A
+# globally-installed uv (e.g. from astral.sh's own install script, landing in
+# .local/bin, entirely outside this project's control) used to be accepted by
+# the caller the moment Find-Uv returned anything, without ever comparing its
+# version to UV_VERSION -- confirmed hitting this for real: a machine with an
+# older uv already on PATH silently diverged from the pin instead of
+# triggering Install-Uv's pinning logic below.
+function Resolve-PinnedUv {
+    $uv = Find-Uv
+    if ($uv -and $UvVersion) {
+        $actual = & $uv --version 2>&1
+        if ($actual -notmatch [regex]::Escape($UvVersion)) {
+            Write-Warn "Found uv at $uv ($actual) but versions.env pins UV_VERSION=$UvVersion -- installing the pinned version instead..."
+            $uv = $null
+        }
+    }
+    return $uv
+}
+
 function Install-Uv {
-    Write-Warn "uv not found -- installing automatically ($UvVersion)..."
+    Write-Warn "uv not found or not at the pinned version -- installing $UvVersion automatically..."
     $winget = Get-Command winget -ErrorAction SilentlyContinue
     if ($winget -and $UvVersion) {
         winget install --id astral-sh.uv -e --version $UvVersion --silent --accept-package-agreements --accept-source-agreements
@@ -152,7 +173,7 @@ if (Test-Path $python) {
 }
 
 if (-not (Test-Path $python)) {
-    $uv = Find-Uv
+    $uv = Resolve-PinnedUv
     if (-not $uv) {
         $uv = Install-Uv
     }

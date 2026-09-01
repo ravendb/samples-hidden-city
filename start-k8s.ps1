@@ -288,6 +288,26 @@ function Invoke-Preflight {
         Msg = "k8s/kind-config.yaml node image matches versions.env KIND_NODE_IMAGE"
     }
 
+    # Checked here, not just later when the ravendb-license k8s Secret gets
+    # created from this file: the RavenDB operator's admission webhook always
+    # requires spec.licenseSecretRef to resolve, so a missing license.json is
+    # guaranteed to fail eventually. Was found deep in the script's own
+    # secrets/certs step (well past the point where a stale, already-cached
+    # RAVENDB_LICENSE value in k8s/secrets.local.yaml can make "OK: RAVENDB_LICENSE
+    # already set" print even though this file no longer exists on disk --
+    # those are two independent, unsynchronized representations of the license,
+    # see Ensure-RavenDbCerts's caller below). Checking it here means the whole
+    # run fails in seconds, before Docker/kind/cert work even starts.
+    $licenseJsonOk = Test-Path "$root\license.json"
+    $checks += @{
+        Ok  = $licenseJsonOk
+        Msg = if ($licenseJsonOk) {
+            "license.json present at repo root"
+        } else {
+            "license.json missing at repo root (required for the ravendb-license k8s Secret)"
+        }
+    }
+
     Write-Host "`n  Preflight:" -ForegroundColor Cyan
     $failed = $false
     foreach ($c in $checks) {
@@ -386,37 +406,60 @@ function Ensure-RavenDbCerts {
     # Fail fast with a clear message if the legacy provider (needed for the
     # -legacy PKCS12 export below) can't load, instead of surfacing a cryptic
     # DSO_load stack trace deep inside pkcs12 export.
-    $legacyProbe = & $openssl list -providers -legacy 2>&1
-    $legacyOk = ($LASTEXITCODE -eq 0) -and (($legacyProbe -join "`n") -match "legacy")
+    #
+    # This runs the REAL operation (a throwaway `pkcs12 -export -legacy`) as
+    # the probe, not a proxy check. An earlier version probed via
+    # `openssl list -providers -legacy`, which looked like a capability check
+    # but isn't valid input for every build's `list` subcommand even when the
+    # legacy provider itself loads and works fine -- confirmed for real on
+    # FireDaemon OpenSSL 4.0.1: `list -providers -legacy` fails with
+    # "Unknown option: -legacy" while `pkcs12 -export -legacy` (the actual
+    # command used below) succeeds outright on that same install. That false
+    # positive blocked an already-working setup and sent it into a pointless
+    # winget reinstall loop. Test the thing you actually need, not a stand-in
+    # for it.
+    function Test-OpenSslLegacyPkcs12 {
+        param([string]$OpenSslExe)
+        $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("osslcheck-" + [guid]::NewGuid())
+        New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+        try {
+            & $OpenSslExe req -x509 -newkey rsa:2048 -keyout "$tmp\k.key" -out "$tmp\k.crt" `
+                -days 1 -nodes -subj "/CN=legacy-probe" *> $null
+            & $OpenSslExe pkcs12 -export -legacy -out "$tmp\k.pfx" `
+                -inkey "$tmp\k.key" -in "$tmp\k.crt" -passout pass: *> $null
+            return $LASTEXITCODE -eq 0
+        } finally {
+            Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+        }
+    }
+
+    $legacyOk = Test-OpenSslLegacyPkcs12 -OpenSslExe $openssl
 
     if (-not $legacyOk) {
-        # Confirmed hitting this for real: a DIFFERENT openssl (e.g. an old
-        # "OpenSSL-Win64" install with no provider architecture at all --
-        # "list: Unknown option: -legacy") was already on PATH, so
-        # Resolve-OpenSslExe's PATH fallback found *something* and never
-        # bothered installing FireDaemon at all, above. Don't just error out
+        # A genuinely incapable/broken openssl (e.g. an old "OpenSSL-Win64"
+        # install with no provider architecture at all, or a FireDaemon
+        # install missing legacy.dll) was resolved. Don't just error out
         # here: install/repair FireDaemon specifically and re-resolve --
         # Resolve-OpenSslExe checks FireDaemon's own install directory before
         # ever falling back to PATH, so this bypasses whatever broken openssl
         # was shadowing it, the same way the "not found at all" branch above
         # already does.
         if (Get-Command winget -ErrorAction SilentlyContinue) {
-            Write-Warn "Resolved openssl ($openssl) can't load the 'legacy' provider -- installing FireDaemon.OpenSSL $($Versions.OPENSSL_VERSION) instead..."
+            Write-Warn "Resolved openssl ($openssl) can't do a -legacy PKCS12 export -- installing FireDaemon.OpenSSL $($Versions.OPENSSL_VERSION) instead..."
             winget install -e --id FireDaemon.OpenSSL --version $Versions.OPENSSL_VERSION --accept-package-agreements --accept-source-agreements
             $openssl = Resolve-OpenSslExe
             if ($openssl) {
-                $legacyProbe = & $openssl list -providers -legacy 2>&1
-                $legacyOk = ($LASTEXITCODE -eq 0) -and (($legacyProbe -join "`n") -match "legacy")
+                $legacyOk = Test-OpenSslLegacyPkcs12 -OpenSslExe $openssl
             }
         }
     }
 
     if (-not $legacyOk) {
-        Write-Host "  ERROR: openssl's 'legacy' provider failed to load (needed for PKCS12 export)." -ForegroundColor Red
+        Write-Host "  ERROR: openssl can't do a -legacy PKCS12 export (needed for the operator's cert format)." -ForegroundColor Red
         Write-Host "    Resolved openssl: $openssl" -ForegroundColor Gray
-        Write-Host "    A different/older openssl install may be shadowing FireDaemon's -- check with" -ForegroundColor Gray
-        Write-Host "    'where.exe openssl' and remove or reorder it on PATH, then re-run." -ForegroundColor Gray
-        Write-Host "    $legacyProbe" -ForegroundColor Gray
+        Write-Host "    A different/older openssl install may be shadowing FireDaemon's, or this" -ForegroundColor Gray
+        Write-Host "    install's legacy provider module is missing/broken -- check with" -ForegroundColor Gray
+        Write-Host "    'where.exe openssl' and '& `"$openssl`" list -providers -provider legacy', then re-run." -ForegroundColor Gray
         exit 1
     }
 
@@ -433,27 +476,43 @@ x509_extensions = ext
 [ext]
 basicConstraints = critical, CA:TRUE
 keyUsage = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
 "@ | Set-Content "$CertsDir\ca-ext.cnf" -Encoding utf8
 
+    # Two extension sections: req_ext (no AKI -- used while generating the CSR,
+    # before any CA is in scope) and sign_ext (adds authorityKeyIdentifier --
+    # used only when x509 signs the CSR, where -CA/-CAkey give it something to
+    # point at). Folding authorityKeyIdentifier into the section req_extensions
+    # references makes `openssl req -new` itself fail ("no issuer certificate"),
+    # since req has no -CA at that point -- confirmed reproducing it locally.
     @"
 [req]
 distinguished_name = dn
-req_extensions = ext
+req_extensions = req_ext
 [dn]
-[ext]
+[req_ext]
 subjectAltName = $sanEntries
 keyUsage = critical, digitalSignature, keyEncipherment
 extendedKeyUsage = serverAuth, clientAuth
+[sign_ext]
+subjectAltName = $sanEntries
+keyUsage = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth, clientAuth
+authorityKeyIdentifier = keyid,issuer
 "@ | Set-Content "$CertsDir\server-san.cnf" -Encoding utf8
 
     @"
 [req]
 distinguished_name = dn
-req_extensions = ext
+req_extensions = req_ext
 [dn]
-[ext]
+[req_ext]
 keyUsage = critical, digitalSignature, keyEncipherment
 extendedKeyUsage = clientAuth
+[sign_ext]
+keyUsage = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = clientAuth
+authorityKeyIdentifier = keyid,issuer
 "@ | Set-Content "$CertsDir\client-ext.cnf" -Encoding utf8
 
     # CA
@@ -468,7 +527,7 @@ extendedKeyUsage = clientAuth
         -subj "/CN=$($NodeTags[0]).hiddencity.local" -config "$CertsDir\server-san.cnf"
     & $openssl x509 -req -in "$CertsDir\server.csr" -CA "$CertsDir\ca.crt" -CAkey "$CertsDir\ca.key" `
         -CAcreateserial -out "$CertsDir\server.crt" -days 825 -sha256 `
-        -extfile "$CertsDir\server-san.cnf" -extensions ext
+        -extfile "$CertsDir\server-san.cnf" -extensions sign_ext
 
     # Client
     & $openssl genrsa -out "$CertsDir\client.key" 2048 2>$null
@@ -476,7 +535,7 @@ extendedKeyUsage = clientAuth
         -subj "/CN=hidden-city-client" -config "$CertsDir\client-ext.cnf"
     & $openssl x509 -req -in "$CertsDir\client.csr" -CA "$CertsDir\ca.crt" -CAkey "$CertsDir\ca.key" `
         -CAcreateserial -out "$CertsDir\client.crt" -days 825 -sha256 `
-        -extfile "$CertsDir\client-ext.cnf" -extensions ext
+        -extfile "$CertsDir\client-ext.cnf" -extensions sign_ext
 
     # Legacy-encoding PKCS12 -- required by the operator, see function comment above
     & $openssl pkcs12 -export -legacy -out "$CertsDir\server.pfx" `
@@ -636,10 +695,8 @@ $ravenCertsDir = "$root\k8s\ravendb\certs"
 $ravenNodeTags = Get-RavenNodeTags
 Ensure-RavenDbCerts -CertsDir $ravenCertsDir -NodeTags $ravenNodeTags
 
-if (-not (Test-Path "$root\license.json")) {
-    Write-Warn "license.json not found at repo root -- the ravendb-license Secret can't be created."
-    Write-Warn "Save your RavenDB license JSON to license.json in the repo root and re-run."
-}
+# license.json's presence is already asserted in Invoke-Preflight, at the very
+# start of the run -- no need to re-check it here.
 
 # --- kind cluster ---
 $step++
@@ -757,8 +814,19 @@ $ravenSecrets = @(
 )
 foreach ($s in $ravenSecrets) {
     if (-not (Test-Path $s.SourceFile)) {
-        Write-Warn "Skipping secret $($s.Name) -- source file missing: $($s.SourceFile)"
-        continue
+        # Was warn-and-skip: the RavenDB Helm install a few steps later
+        # references all four of these by name (spec.licenseSecretRef,
+        # certificate refs), so a silently-skipped secret here is guaranteed
+        # to resurface as a cryptic admission-webhook or cert-mount failure
+        # downstream -- the exact same "existence, not capability" shape as
+        # the license.json and openssl bugs above. license.json's existence
+        # is already asserted in Invoke-Preflight; the three cert files are
+        # asserted right after generation in Ensure-RavenDbCerts. Reaching
+        # this branch means one disappeared between then and now (or a real
+        # bug in this script) -- either way, fail loudly here instead of
+        # producing a cluster that looks like it's coming up and isn't.
+        Write-Host "  ERROR: can't create secret $($s.Name) -- source file missing: $($s.SourceFile)" -ForegroundColor Red
+        exit 1
     }
     $fromFileArg = "--from-file=$($s.FromFile)=$($s.SourceFile)"
     $yaml = kubectl create secret generic $s.Name -n $NS $fromFileArg --dry-run=client -o yaml
@@ -794,10 +862,19 @@ if (-not $SkipOperator) {
 
     Write-Host "  Installing ingress-nginx (kind provider)..." -ForegroundColor Gray
     kubectl apply -f $IngressNginxUrl
+    # 300s, not 120s: on a freshly-created kind node (e.g. right after
+    # -DeleteCluster), containerd has nothing cached -- every image (Calico,
+    # cert-manager, this controller, its webhook cert-gen job) pulls from
+    # scratch. Confirmed hitting the 120s ceiling for real on a cold cluster:
+    # `kubectl describe pod` showed the image pull alone took 2m0.48s --
+    # 0.48s over the old timeout, plus repeated FailedMount retries on the
+    # webhook-cert secret while the admission Jobs were still creating it
+    # (expected, self-resolving). Not a config or probe problem, just not
+    # enough runway for a cold pull.
     kubectl wait --namespace ingress-nginx `
         --for=condition=ready pod `
         --selector=app.kubernetes.io/component=controller `
-        --timeout=120s
+        --timeout=300s
     if ($LASTEXITCODE -ne 0) { Write-Host "  ERROR: ingress-nginx controller pod did not become ready in time." -ForegroundColor Red; exit 1 }
     Write-Ok "ingress-nginx ready"
 
@@ -964,15 +1041,15 @@ if ($imageRebuilt) {
 }
 
 $step++
-Write-Step $step $totalSteps "Waiting for agent deployment (up to ~20 min on a cold DB -- see k8s/agent/deployment.yaml)"
-# 1200s, not 120s: k8s/agent/deployment.yaml's own readiness/liveness probes
-# already budget ~20 minutes for this exact case (its own comment: "_startup()
-# runs the Travelpayouts bulk scraper synchronously before uvicorn serves...
-# cold start is easily 10+ minutes"). This step's timeout used to be far
-# shorter than what the pod itself is configured to tolerate -- harmless
-# before database creation reliably succeeded (a failed, swallowed seed made
-# startup fast, for the wrong reason), but a real bottleneck now that it does.
-kubectl rollout status deployment/agent -n $NS --timeout=1200s
+Write-Step $step $totalSteps "Waiting for agent deployment (up to ~3 min on a cold DB -- see k8s/agent/deployment.yaml)"
+# 180s: the Travelpayouts bulk scraper no longer blocks readiness (it runs as
+# a background task in _startup() -- see app.py) -- what's left gating it is
+# ensure_database's own retry budget (up to 90s) plus two quick API
+# validation calls. This used to be 1200s to match the scraper blocking
+# startup for ~20 min; confirmed hitting that ceiling for real on a cold,
+# 2-replica rollout before the background-task fix (both pods scraping ~80
+# origins concurrently, pushing past even that generous allowance).
+kubectl rollout status deployment/agent -n $NS --timeout=180s
 if ($LASTEXITCODE -ne 0) { Write-Host "  ERROR: agent deployment did not roll out in time." -ForegroundColor Red; exit 1 }
 Write-Ok "Agent deployment ready"
 

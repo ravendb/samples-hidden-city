@@ -218,6 +218,20 @@ preflight() {
     printf '    FAIL  k8s/kind-config.yaml node image (%s) does not match versions.env KIND_NODE_IMAGE\n' "$kind_img"; failed=true
   fi
 
+  # Checked here, not just later when the ravendb-license k8s Secret gets
+  # created from this file: the RavenDB operator's admission webhook always
+  # requires spec.licenseSecretRef to resolve, so a missing license.json is
+  # guaranteed to fail eventually. A stale, already-cached RAVENDB_LICENSE
+  # value in k8s/secrets.local.yaml can make "already set" print even though
+  # this file no longer exists on disk -- those are two independent,
+  # unsynchronized representations of the license. Checking it here means the
+  # whole run fails in seconds, before Docker/kind/cert work even starts.
+  if [[ -f "$root/license.json" ]]; then
+    printf '    OK    license.json present at repo root (required for the ravendb-license k8s Secret)\n'
+  else
+    printf '    FAIL  license.json missing at repo root (required for the ravendb-license k8s Secret)\n'; failed=true
+  fi
+
   printf '\n'
   [[ "$failed" == "true" ]] && fail "preflight failed -- fix the above before continuing."
   return 0
@@ -402,8 +416,24 @@ ensure_ravendb_certs() {
   # conflict that broke -legacy on Windows (see start-k8s.ps1's
   # Resolve-OpenSslExe) -- still probe it for a fast, clear failure if a
   # minimal container image lacks the legacy provider.
-  openssl list -providers -legacy 2>&1 | grep -qi legacy ||
-    fail "openssl's 'legacy' provider failed to load (needed for PKCS12 export) -- install a full openssl package."
+  #
+  # This runs the REAL operation (a throwaway `pkcs12 -export -legacy`) as
+  # the probe, not a proxy check. `openssl list -providers -legacy` looks
+  # like a capability check but isn't valid input for every build's `list`
+  # subcommand even when the legacy provider itself loads and works fine --
+  # confirmed for real on FireDaemon OpenSSL 4.0.1 (Windows side): `list
+  # -providers -legacy` fails with "Unknown option: -legacy" while `pkcs12
+  # -export -legacy` (the actual command used below) succeeds outright on
+  # that same install. Test the thing you actually need, not a stand-in.
+  _legacy_probe_dir="$(mktemp -d)"
+  openssl req -x509 -newkey rsa:2048 -keyout "$_legacy_probe_dir/k.key" \
+    -out "$_legacy_probe_dir/k.crt" -days 1 -nodes -subj "/CN=legacy-probe" >/dev/null 2>&1
+  openssl pkcs12 -export -legacy -out "$_legacy_probe_dir/k.pfx" \
+    -inkey "$_legacy_probe_dir/k.key" -in "$_legacy_probe_dir/k.crt" -passout pass: >/dev/null 2>&1
+  _legacy_ok=$?
+  rm -rf "$_legacy_probe_dir"
+  [[ $_legacy_ok -eq 0 ]] ||
+    fail "openssl can't do a -legacy PKCS12 export (needed for the operator's cert format) -- install a full openssl package with the legacy provider."
 
   mkdir -p "$certs_dir"
   echo "  Generating self-signed RavenDB TLS chain in k8s/ravendb/certs..."
@@ -422,27 +452,43 @@ x509_extensions = ext
 [ext]
 basicConstraints = critical, CA:TRUE
 keyUsage = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
 EOF
 
+  # Two extension sections: req_ext (no AKI -- used while generating the CSR,
+  # before any CA is in scope) and sign_ext (adds authorityKeyIdentifier --
+  # used only when x509 signs the CSR, where -CA/-CAkey give it something to
+  # point at). Folding authorityKeyIdentifier into the section req_extensions
+  # references makes `openssl req -new` itself fail ("no issuer certificate"),
+  # since req has no -CA at that point -- confirmed reproducing it locally.
   cat > "$certs_dir/server-san.cnf" <<EOF
 [req]
 distinguished_name = dn
-req_extensions = ext
+req_extensions = req_ext
 [dn]
-[ext]
+[req_ext]
 subjectAltName = $san_entries
 keyUsage = critical, digitalSignature, keyEncipherment
 extendedKeyUsage = serverAuth, clientAuth
+[sign_ext]
+subjectAltName = $san_entries
+keyUsage = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth, clientAuth
+authorityKeyIdentifier = keyid,issuer
 EOF
 
   cat > "$certs_dir/client-ext.cnf" <<EOF
 [req]
 distinguished_name = dn
-req_extensions = ext
+req_extensions = req_ext
 [dn]
-[ext]
+[req_ext]
 keyUsage = critical, digitalSignature, keyEncipherment
 extendedKeyUsage = clientAuth
+[sign_ext]
+keyUsage = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = clientAuth
+authorityKeyIdentifier = keyid,issuer
 EOF
 
   openssl genrsa -out "$certs_dir/ca.key" 4096 2>/dev/null
@@ -455,14 +501,14 @@ EOF
     -subj "/CN=${node_tags[0]}.hiddencity.local" -config "$certs_dir/server-san.cnf"
   openssl x509 -req -in "$certs_dir/server.csr" -CA "$certs_dir/ca.crt" -CAkey "$certs_dir/ca.key" \
     -CAcreateserial -out "$certs_dir/server.crt" -days 825 -sha256 \
-    -extfile "$certs_dir/server-san.cnf" -extensions ext
+    -extfile "$certs_dir/server-san.cnf" -extensions sign_ext
 
   openssl genrsa -out "$certs_dir/client.key" 2048 2>/dev/null
   openssl req -new -key "$certs_dir/client.key" -out "$certs_dir/client.csr" \
     -subj "/CN=hidden-city-client" -config "$certs_dir/client-ext.cnf"
   openssl x509 -req -in "$certs_dir/client.csr" -CA "$certs_dir/ca.crt" -CAkey "$certs_dir/ca.key" \
     -CAcreateserial -out "$certs_dir/client.crt" -days 825 -sha256 \
-    -extfile "$certs_dir/client-ext.cnf" -extensions ext
+    -extfile "$certs_dir/client-ext.cnf" -extensions sign_ext
 
   openssl pkcs12 -export -legacy -out "$certs_dir/server.pfx" \
     -inkey "$certs_dir/server.key" -in "$certs_dir/server.crt" \
@@ -483,10 +529,8 @@ raven_node_tags=()
 while IFS= read -r tag; do raven_node_tags+=("$tag"); done < <(get_raven_node_tags)
 ensure_ravendb_certs "$raven_certs_dir" "${raven_node_tags[@]}"
 
-if [[ ! -f "$root/license.json" ]]; then
-  warn "license.json not found at repo root -- the ravendb-license Secret can't be created."
-  warn "Save your RavenDB license JSON to license.json in the repo root and re-run."
-fi
+# license.json's presence is already asserted in preflight(), at the very
+# start of the run -- no need to re-check it here.
 
 # --- kind cluster ---
 step "kind cluster '$CLUSTER_NAME'"
@@ -573,8 +617,16 @@ declare -a raven_secret_defs=(
 for def in "${raven_secret_defs[@]}"; do
   IFS='|' read -r sec_name source_file from_file <<<"$def"
   if [[ ! -f "$source_file" ]]; then
-    warn "Skipping secret $sec_name -- source file missing: $source_file"
-    continue
+    # Was warn-and-skip: the RavenDB Helm install a few steps later
+    # references all four of these by name (spec.licenseSecretRef,
+    # certificate refs), so a silently-skipped secret here is guaranteed to
+    # resurface as a cryptic admission-webhook or cert-mount failure
+    # downstream. license.json's existence is already asserted in
+    # preflight(); the three cert files are asserted right after generation
+    # in ensure_ravendb_certs(). Reaching this branch means one disappeared
+    # between then and now -- fail loudly instead of producing a cluster
+    # that looks like it's coming up and isn't.
+    fail "can't create secret $sec_name -- source file missing: $source_file"
   fi
   kubectl create secret generic "$sec_name" -n "$NS" "--from-file=${from_file}=${source_file}" --dry-run=client -o yaml |
     kubectl apply -f - >/dev/null
@@ -605,8 +657,17 @@ if [[ "$SKIP_OPERATOR" != "true" ]]; then
 
   echo "  Installing ingress-nginx (kind provider)..."
   kubectl apply -f "$INGRESS_NGINX_URL"
+  # 300s, not 120s: on a freshly-created kind node (e.g. right after
+  # --delete-cluster), containerd has nothing cached -- every image (Calico,
+  # cert-manager, this controller, its webhook cert-gen job) pulls from
+  # scratch. Confirmed hitting the 120s ceiling for real on a cold cluster:
+  # `kubectl describe pod` showed the image pull alone took 2m0.48s -- 0.48s
+  # over the old timeout, plus repeated FailedMount retries on the
+  # webhook-cert secret while the admission Jobs were still creating it
+  # (expected, self-resolving). Not a config or probe problem, just not
+  # enough runway for a cold pull.
   kubectl wait --namespace ingress-nginx --for=condition=ready pod \
-    --selector=app.kubernetes.io/component=controller --timeout=120s ||
+    --selector=app.kubernetes.io/component=controller --timeout=300s ||
     fail "ingress-nginx controller pod did not become ready in time."
   ok "ingress-nginx ready"
 
@@ -768,15 +829,15 @@ if [[ "$image_rebuilt" == "true" ]]; then
   kubectl rollout restart deployment/subscription-worker -n "$NS" >/dev/null
 fi
 
-# 1200s, not 120s: k8s/agent/deployment.yaml's own readiness/liveness probes
-# already budget ~20 minutes for this exact case (its own comment: "_startup()
-# runs the Travelpayouts bulk scraper synchronously before uvicorn serves...
-# cold start is easily 10+ minutes"). This step's timeout used to be far
-# shorter than what the pod itself is configured to tolerate -- harmless
-# before database creation reliably succeeded (a failed, swallowed seed made
-# startup fast, for the wrong reason), but a real bottleneck now that it does.
-step "Waiting for agent deployment (up to ~20 min on a cold DB -- see k8s/agent/deployment.yaml)"
-kubectl rollout status deployment/agent -n "$NS" --timeout=1200s || fail "agent deployment did not roll out in time."
+# 180s: the Travelpayouts bulk scraper no longer blocks readiness (it runs as
+# a background task in _startup() -- see app.py) -- what's left gating it is
+# ensure_database's own retry budget (up to 90s) plus two quick API
+# validation calls. This used to be 1200s to match the scraper blocking
+# startup for ~20 min; confirmed hitting that ceiling for real on a cold,
+# 2-replica rollout before the background-task fix (both pods scraping ~80
+# origins concurrently, pushing past even that generous allowance).
+step "Waiting for agent deployment (up to ~3 min on a cold DB -- see k8s/agent/deployment.yaml)"
+kubectl rollout status deployment/agent -n "$NS" --timeout=180s || fail "agent deployment did not roll out in time."
 ok "Agent deployment ready"
 
 # --- port-forwards (skipped for --no-wait / CI: readiness above is the signal) ---

@@ -11,7 +11,7 @@ from src.tools.save_conversation import persist_turn, update_constraints
 from src.tools.search_routes import _is_stale, search_routes
 from src.tools.update_user_profile import update_user_profile
 
-WARN_TOOL_TOKENS = 800  # mirrors src/agent/loop.py
+WARN_TOOL_TOKENS = 1800  # mirrors src/agent/loop.py
 
 
 class TestIsStale:
@@ -414,8 +414,8 @@ class TestSearchRoutes:
         assert result["routes"][0]["to"] == "LHR"
 
     @pytest.mark.asyncio
-    async def test_result_within_800_token_budget(self):
-        """Tool result must stay inside the 800-token budget enforced by the agent loop."""
+    async def test_result_within_1800_token_budget(self):
+        """Tool result must stay inside the 1800-token budget enforced by the agent loop."""
         now = datetime.now(timezone.utc).isoformat()
         routes = [
             {
@@ -442,9 +442,9 @@ class TestSearchRoutes:
         )
 
     @pytest.mark.asyncio
-    async def test_connecting_hubs_result_within_800_token_budget(self):
+    async def test_connecting_hubs_result_within_1800_token_budget(self):
         """A connecting_hubs response at its max size (3 hubs) must also stay inside
-        the 800-token tool-result budget."""
+        the 1800-token tool-result budget."""
         routes = [
             {"origin": "AAA", "destination": f"HUB{i}", "typical_price": {"min": 100.0}}
             for i in range(3)

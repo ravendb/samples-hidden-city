@@ -148,12 +148,13 @@ if [[ "$image_rebuilt" == "true" ]]; then
 fi
 
 # ── step 7: wait for agent ────────────────────────────────────────────────────
-# 1200s, not 120s: k8s/agent/deployment.yaml's own readiness/liveness probes
-# already budget ~20 minutes for a cold DB (its own comment: "_startup() runs
-# the Travelpayouts bulk scraper synchronously before uvicorn serves... cold
-# start is easily 10+ minutes").
-step "Waiting for agent deployment to roll out (up to ~20 min on a cold DB)"
-kubectl rollout status deployment/agent -n "$NS" --timeout=1200s
+# 180s: the Travelpayouts bulk scraper no longer blocks readiness (it runs as
+# a background task in _startup() -- see app.py) -- what's left gating it is
+# ensure_database's own retry budget (up to 90s) plus two quick API
+# validation calls. This used to be 1200s to match the scraper blocking
+# startup for ~20 min.
+step "Waiting for agent deployment to roll out (up to ~3 min on a cold DB)"
+kubectl rollout status deployment/agent -n "$NS" --timeout=180s
 ok "Agent deployment ready"
 
 # ── step 8: final status ──────────────────────────────────────────────────────

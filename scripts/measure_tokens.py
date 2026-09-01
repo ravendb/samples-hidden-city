@@ -81,7 +81,7 @@ async def run_benchmark() -> None:
     print("-" * 78)
     print(f"{'Average':<45} {avg:>7} {avg_reduction:>9.0f}%")
     print(f"\nNaive baseline estimate: {NAIVE_BASELINE_TOKENS:,} tokens/request")
-    print(f"Token budget target:      1,500 tokens/request")
+    print(f"Token budget target:      2,500 tokens/request")
     print(f"Actual average:           {avg:,} tokens/request")
 
     budget_metrics = await (await httpx.AsyncClient(base_url=AGENT_URL).get("/metrics")).json()

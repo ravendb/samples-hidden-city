@@ -104,7 +104,7 @@ Point to `ravendb-cluster-svc` as ClusterIP:
 │                                 │                                  │
 │   Raw Travelpayouts → LLM prompt │   Tool call → RavenDB → LLM      │
 │                                 │                                  │
-│         40 000 tokens           │           1 500 tokens           │
+│         40 000 tokens           │           2 500 tokens           │
 │   ████████████████████████░░    │   █░░░░░░░░░░░░░░░░░░░░░░░░░░   │
 │                                 │                                  │
 │        $0.12 / request          │         $0.005 / request         │
@@ -129,7 +129,7 @@ Point to `ravendb-cluster-svc` as ClusterIP:
   │  tool results    ░░░   612 tok          │
   │  ─────────────────────────────          │
   │  TOTAL           ░░░░  897 tok  ✓       │
-  │                  budget: 1 500          │
+  │                  budget: 2 500          │
   └─────────────────────────────────────────┘
 ```
 
@@ -150,7 +150,7 @@ Point to `ravendb-cluster-svc` as ClusterIP:
         naive  +k8s  +ES  RavenDB
                           in-cluster
 
-                            ← 96% reduction
+                            ← 94% reduction
 ```
 
 Run `python -m scripts.measure_tokens` live to show real numbers during the demo.

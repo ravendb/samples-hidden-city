@@ -157,7 +157,7 @@ Kafka ──price events──▶ consumer pod ──▶ ES update ──▶ age
 ```
 User ──prompt only──▶ Agent (FastAPI, k8s) ──▶ OpenAI API
                            │                    ▲
-                           │  tool call          │  ~1 500 tokens
+                           │  tool call          │  ~2 500 tokens
                            ▼                    │
                       RavenDB (in-cluster) ─────┘
                       ┌──────────────────────────────────┐
@@ -188,7 +188,7 @@ User ──prompt only──▶ Agent (FastAPI, k8s) ──▶ OpenAI API
 1. `search_routes` returns `stale: true`.
 2. Agent calls `get_live_prices(origin="WAW", destination="LHR")`.
 3. Travelpayouts live API is called once. Result is written back to RavenDB.
-4. Same 1 500 token LLM call.
+4. Same 2 500 token LLM call.
 5. Next user asking the same route hits the cache — zero Travelpayouts calls.
 
 **What happens (price drop alert — zero polling):**
@@ -208,12 +208,12 @@ no polling loop, no message broker.
 
 | Component | Calculation | Daily cost |
 |-----------|-------------|------------|
-| LLM input tokens | 1 000 × 1 500 tok × $0.15/1M | **$0.225** |
+| LLM input tokens | 1 000 × 2 500 tok × $0.15/1M | **$0.375** |
 | LLM output tokens | 1 000 × 400 tok × $0.60/1M | $0.24 |
 | Travelpayouts calls (cache miss, ~5 %) | 50 × free tier | $0 |
 | RavenDB (3-node cluster, k8s, 3 × t3.medium) | — | **$90/month** |
 | Egress (prompt only, 0.1 KB/req) | 1 000 × 0.1 KB × $0.09/GB | ~$0 |
-| **Total LLM** | | **~$0.47/day** |
+| **Total LLM** | | **~$0.62/day** |
 | **Total infra** | | **~$90/month** |
 
 ---
@@ -227,7 +227,7 @@ no polling loop, no message broker.
 | 1 — Naive | 40 000 | $0.0060 | 400 | $0.00024 | **$0.0062** |
 | 2 — Redis+Postgres | 35 000 | $0.0053 | 400 | $0.00024 | **$0.0055** |
 | 3 — ES+pgvector+Kafka | 20 000 | $0.0030 | 400 | $0.00024 | **$0.0032** |
-| 4 — RavenDB in-cluster | 1 500 | $0.00023 | 400 | $0.00024 | **$0.0005** |
+| 4 — RavenDB in-cluster | 2 500 | $0.00038 | 400 | $0.00024 | **$0.0006** |
 
 *Pricing: $0.15/1M input tokens, $0.60/1M output tokens (gpt-4o-mini, 2025)*
 
@@ -235,9 +235,9 @@ no polling loop, no message broker.
 
 | Scale | Stage 1 | Stage 2 | Stage 3 | Stage 4 | Stage 1 → 4 saving |
 |-------|---------|---------|---------|---------|---------------------|
-| 1 000 req/day | $6.26 | $5.49 | $3.24 | **$0.47** | **$5.79/day** |
-| 10 000 req/day | $62.6 | $54.9 | $32.4 | **$4.65** | **$57.9/day** |
-| 100 000 req/day | $626 | $549 | $324 | **$46.5** | **$579/day** |
+| 1 000 req/day | $6.26 | $5.49 | $3.24 | **$0.62** | **$5.65/day** |
+| 10 000 req/day | $62.6 | $54.9 | $32.4 | **$6.15** | **$56.5/day** |
+| 100 000 req/day | $626 | $549 | $324 | **$61.5** | **$565/day** |
 
 ### Infrastructure overhead (monthly, HA deployment)
 
@@ -267,10 +267,10 @@ The agent enforces a hard budget via the tool result warning in `src/agent/loop.
 ```
 system_prompt     ≈  200 tokens  (fixed)
 user_message      ≈  100 tokens  (varies; 100 is a conservative average)
-tool_results      ≤  800 tokens  (enforced — warning logged if exceeded)
+tool_results      ≤ 1800 tokens  (enforced — warning logged if exceeded)
 assistant_response ≤  400 tokens  (max_tokens parameter)
 ─────────────────────────────────
-Total             ≈ 1 500 tokens  per turn
+Total             ≈ 2 500 tokens  per turn
 ```
 
 The raw Travelpayouts bulk response for a typical route query is large JSON with
@@ -332,7 +332,7 @@ ravendb-operator/ravendb-cluster -f k8s/ravendb/values.yaml`), not a raw
    Point at the 40 000 token number.
 
 2. **Show Stage 4** — run `scripts/measure_tokens.py` against the agent.
-   Point at the ~1 500 token number.
+   Point at the ~2 500 token number.
 
 3. **Show zero egress** — run `scripts/measure_egress.py`. Highlight the
    "Retrieval egress: 0 KB" line.

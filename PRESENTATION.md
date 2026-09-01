@@ -38,7 +38,7 @@ Na zewnątrz klastra wychodzi tylko prompt użytkownika. 100 tokenów. Zero retr
 
 (pokaż measure_tokens.py output)
 
-1500 tokenów na request zamiast 40 000. Koszt LLM: $0.47/dzień zamiast $6. To jest 92% redukcja — bez zmiany modelu.
+2500 tokenów na request zamiast 40 000. Koszt LLM: $0.62/dzień zamiast $6. To jest 90% redukcja — bez zmiany modelu.
 
 LIVE DEMO — trzy momenty (~5 min)
 1. Zero egress
@@ -88,7 +88,7 @@ Inference zostawiliśmy na zewnątrz — OpenAI API — żeby pokazać, że oszc
 
 Jeśli macie GPU w klastrze, llm-d albo vLLM jako drop-in replacement eliminuje ostatni egres. Interface narzędzi agenta się nie zmienia.
 
-Summary: 40 000 tokenów → 1 500. $6/dzień → $0.47. Pięć systemów → jeden. Jeden kubectl apply.
+Summary: 40 000 tokenów → 2 500. $6/dzień → $0.62. Pięć systemów → jeden. Jeden kubectl apply.
 
 PYTANIA — przydatne odpowiedzi z góry
 "Dlaczego nie po prostu Redis?"

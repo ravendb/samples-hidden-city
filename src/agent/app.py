@@ -2,9 +2,11 @@
 FastAPI entrypoint.
 Session loading/saving happens here; the loop itself is stateless.
 """
+import asyncio
 import logging
 import os
 import tempfile
+import threading
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -24,6 +26,8 @@ from src.db.seed import seed_if_empty
 from src.tools.get_user_profile import DEFAULT_PREFERENCES, build_preferences
 from src.tools.get_user_profile import get_user_profile as _get_user_profile
 from src.tools.save_conversation import persist_turn
+from src.tools.openai_status import is_valid as _openai_key_is_valid
+from src.tools.openai_status import set_valid as _set_openai_key_valid
 from src.tools.travelpayouts_status import is_valid as _travelpayouts_token_is_valid
 from src.tools.travelpayouts_status import set_valid as _set_travelpayouts_token_valid
 from src.tools.update_user_profile import update_user_profile as _update_user_profile
@@ -62,14 +66,34 @@ def _is_reload_restart() -> bool:
     return False
 
 
+def _run_scraper_background() -> None:
+    """Runs the full Travelpayouts scrape on its own thread with its own event
+    loop, fully isolated from uvicorn's main loop -- see the call site in
+    _startup() for why. asyncio.create_task() alone was NOT enough: this
+    coroutine calls put_document() (src/db/client.py) synchronously for every
+    route via the (non-async) ravendb client, interleaved with the async
+    httpx calls -- confirmed for real that those synchronous writes
+    monopolize the main event loop badly enough that uvicorn's own
+    "Application startup complete" logging was delayed until the scrape
+    finished anyway, identical to the original blocking-await bug it was
+    meant to fix (same millisecond in the logs, on two separate pods). A
+    dedicated thread + its own loop can't be starved by anything happening on
+    the main loop, regardless of what mix of sync/async work runs inside."""
+    try:
+        from src.scraper.run import run as _run_scraper
+
+        asyncio.run(_run_scraper())
+    except Exception as _e:
+        print(f"  Travelpayouts → failed: {_e}", flush=True)
+        log.exception("Travelpayouts fetch failed at startup")
+
+
 async def _print_links_after_startup(host: str, port: str) -> None:
     """Fires one event-loop tick after this coroutine is scheduled, which is
     after uvicorn logs "Application startup complete." (it logs that line
     synchronously right after the startup event handler returns, before the
     loop gets back around to this task) -- so the links land at the bottom,
     not buried under seeding/Travelpayouts scrape output further up."""
-    import asyncio
-
     await asyncio.sleep(0.1)
     ravendb_url = os.getenv("RAVENDB_URL", "http://localhost:8080")
     print("\n  ── Links ──", flush=True)
@@ -81,8 +105,6 @@ async def _print_links_after_startup(host: str, port: str) -> None:
 
 @app.on_event("startup")
 async def _startup() -> None:
-    import asyncio
-
     host = os.getenv("HOST", "127.0.0.1")
     port = os.getenv("PORT", "8001")
     print("\n  Hidden City Flight Agent", flush=True)
@@ -99,6 +121,19 @@ async def _startup() -> None:
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, seed_if_empty)
 
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if _is_key_configured("OPENAI_API_KEY"):
+        from src.agent.loop import validate_openai_key
+
+        openai_key_ok = await validate_openai_key(openai_key)
+        _set_openai_key_valid(openai_key_ok)
+        if not openai_key_ok:
+            print("  OpenAI     → key rejected (401 Unauthorized) — chat will fail until fixed.", flush=True)
+            print("  OpenAI     → fix OPENAI_API_KEY in Profile → API keys & tokens, or in .env.", flush=True)
+    else:
+        _set_openai_key_valid(None)
+        print("  OpenAI     → OPENAI_API_KEY not set — chat will fail until configured.", flush=True)
+
     token = os.getenv("TRAVELPAYOUTS_TOKEN")
     if token:
         from src.scraper.travelpayouts import validate_token
@@ -111,12 +146,29 @@ async def _startup() -> None:
         elif _is_reload_restart():
             print("  Travelpayouts → skipping full scrape (--reload restart, already scraped this session)", flush=True)
         else:
-            try:
-                from src.scraper.run import run as _run_scraper
-                await _run_scraper()
-            except Exception as _e:
-                print(f"  Travelpayouts → failed: {_e}", flush=True)
-                log.exception("Travelpayouts fetch failed at startup")
+            # Run on a separate thread, not just asyncio.create_task() on
+            # this loop: this scrape is sequential over ~80 origins
+            # (src/scraper/run.py), easily runs 10+ minutes, and mixes async
+            # httpx calls with SYNCHRONOUS RavenDB writes (put_document,
+            # src/db/client.py -- the ravendb client has no async API). A
+            # plain create_task() still let those synchronous writes
+            # monopolize this event loop badly enough that uvicorn's own
+            # "Application startup complete" was delayed until the scrape
+            # finished anyway -- confirmed for real (identical millisecond
+            # in the logs on two separate pods), the same symptom as the
+            # original blocking-await bug it was meant to fix. A dedicated
+            # thread with its own event loop (asyncio.run() inside
+            # _run_scraper_background) can't be starved by anything on the
+            # main loop no matter what it does internally. With
+            # k8s/agent/deployment.yaml's replicas: 2, two fresh pods used
+            # to hit Travelpayouts with the same scrape at once on every
+            # cold start (the _is_reload_restart() guard above is a
+            # local-process PPID marker that never matches in a fresh pod),
+            # which is what pushed a real rollout past its progress
+            # deadline. The scrape still writes the same data to RavenDB
+            # either way -- only *when the pod is allowed to answer
+            # /health* changes, not what happens.
+            threading.Thread(target=_run_scraper_background, daemon=True).start()
     else:
         _set_travelpayouts_token_valid(None)
         print("  Travelpayouts → TRAVELPAYOUTS_TOKEN not set, skipping", flush=True)
@@ -233,6 +285,7 @@ async def api_setup_status() -> dict:
     """Report which setup keys are already configured, so the wizard can skip them."""
     return {
         "openai_api_key_set": _is_key_configured("OPENAI_API_KEY"),
+        "openai_api_key_valid": _openai_key_is_valid(),
         "ravendb_license_set": bool(os.getenv("RAVENDB_LICENSE")) or _LICENSE_FILE.exists(),
         "travelpayouts_set": _is_key_configured("TRAVELPAYOUTS_TOKEN"),
         "travelpayouts_valid": _travelpayouts_token_is_valid(),
@@ -256,8 +309,17 @@ def _set_env_value(key: str, value: str) -> None:
 async def api_setup(body: SetupRequest) -> dict:
     """Persist API keys to .env (repo root, never committed — in .gitignore)."""
     if body.openai_api_key:
+        from src.agent.loop import validate_openai_key
+
+        if not await validate_openai_key(body.openai_api_key):
+            raise HTTPException(
+                status_code=400,
+                detail="OpenAI API key rejected (401 Unauthorized) — "
+                "check the value at platform.openai.com → API keys.",
+            )
         _set_env_value("OPENAI_API_KEY", body.openai_api_key)
         os.environ["OPENAI_API_KEY"] = body.openai_api_key
+        _set_openai_key_valid(True)
 
     if body.ravendb_license:
         _set_env_value("RAVENDB_LICENSE", body.ravendb_license)
@@ -467,9 +529,9 @@ async def metrics() -> dict:
         "budget": {
             "system_prompt_tokens": 200,
             "user_message_tokens": 100,
-            "tool_results_tokens": 800,
+            "tool_results_tokens": 1800,
             "response_tokens": 400,
-            "total_tokens": 1500,
+            "total_tokens": 2500,
         },
         "naive_baseline_tokens": "40000-100000",
     }
