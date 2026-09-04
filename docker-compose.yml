@@ -2,7 +2,7 @@ services:
   ravendb:
     # Pinned to match RAVENDB_IMAGE_TAG in versions.env and k8s/ravendb/values.yaml's
     # image: -- preflight asserts all three agree. Bump together, never just one.
-    image: ravendb/ravendb:7.2.5-ubuntu.24.04-x64
+    image: ravendb/ravendb:7.2.6-ubuntu.24.04-x64
     ports:
       - "8080:8080"
       - "38888:38888"
