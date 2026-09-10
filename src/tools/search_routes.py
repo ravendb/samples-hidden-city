@@ -24,6 +24,7 @@ from src.db.client import doc_to_dict, get_store, load_airport_names
 from src.db.geo import haversine_km
 from src.hidden_city.scorer import HiddenCityCandidate, RiskFactor
 from src.tools.get_live_prices import get_live_prices
+from src.tools.resolve_airports import resolve_one_airport
 
 log = logging.getLogger(__name__)
 
@@ -69,8 +70,12 @@ def _adjusted_hidden_score(base_score: float, carry_on_only: bool) -> float:
     real_destination search path below scores every matching hub fresh instead,
     since relying on the stored field there would silently drop valid
     candidates whenever the requested hub isn't the route's single best one.
+
+    Per docs/hidden-city.md: the checked-baggage risk applies when the user
+    HAS checked baggage (bags check through to the final destination, not the
+    hub, which defeats the trick) — i.e. when they are NOT carry-on-only.
     """
-    if not carry_on_only:
+    if carry_on_only:
         return base_score
     return round(base_score * _CHECKED_BAGGAGE_MULTIPLIER, 3)
 
@@ -229,6 +234,27 @@ def _connecting_hub_candidates(store, origin: str, destination: str) -> list[dic
     return candidates[:_HUB_JOIN_MAX_RESULTS]
 
 
+def _resolve_iata(store, value: Optional[str]) -> Optional[str]:
+    """Resolve a raw origin/destination/real_destination argument to an IATA
+    code before it's used in a Routes query.
+
+    The tool schema (src/tools/definitions.py) tells the model to pass IATA
+    codes, but nothing enforces that. Unlike the "from X to Y" fast path in
+    src/agent/loop.py, which resolves city names via RavenDB full-text search
+    (src/tools/resolve_airports.py) before search_routes is ever called, the
+    general model-driven tool-calling flow has no such step — a city name the
+    model passes straight through (e.g. "London" instead of "LHR") would
+    silently match zero Routes documents. This reuses the same
+    resolve_one_airport() full-text lookup the fast path already uses, rather
+    than adding a new LLM tool (see CLAUDE.md's "no new tool without narrow
+    justification" rule). If resolution is ambiguous or finds nothing, the
+    value is returned unchanged (just upper-cased) so behaviour degrades to
+    exactly what it was before — an empty result — never a guess."""
+    if not value:
+        return value
+    return resolve_one_airport(store, value) or value.upper()
+
+
 def _within_budget(price: dict, budget_max: float, budget_currency: Optional[str]) -> bool:
     """Exclude routes priced above budget_max. Only compares when currencies match —
     there's no FX conversion here, so a mismatched currency is left unfiltered rather
@@ -254,9 +280,9 @@ async def search_routes(
     max_results: int = _DEFAULT_MAX_RESULTS,
 ) -> dict:
     store = get_store()
-    origin = origin.upper()
-    destination = destination.upper() if destination else None
-    real_destination = real_destination.upper() if real_destination else None
+    origin = _resolve_iata(store, origin)
+    destination = _resolve_iata(store, destination)
+    real_destination = _resolve_iata(store, real_destination)
     hidden_city_mode = bool(real_destination) and not destination
 
     post_filtering = budget_max is not None or bool(countries_of_interest) or hidden_city_mode
@@ -357,7 +383,9 @@ async def search_routes(
             price_hidden = r.get("typical_price", {}).get("min")
             if price_hidden is None:
                 continue
-            risks = [RiskFactor.CHECKED_BAGGAGE] if carry_on_only else []
+            # Checked baggage travels to the final destination, defeating the
+            # hidden-city trick — so the risk applies when NOT carry-on-only.
+            risks = [] if carry_on_only else [RiskFactor.CHECKED_BAGGAGE]
             candidate = HiddenCityCandidate(
                 origin=from_code,
                 real_destination=real_destination,
@@ -405,7 +433,7 @@ async def search_routes(
             if base_score > 0.5:
                 adj_score = _adjusted_hidden_score(base_score, carry_on_only)
                 risks = []
-                if carry_on_only:
+                if not carry_on_only:
                     risks.append("checked_baggage")
                 route_entry["hidden_city"] = {
                     "via": r.get("hidden_city_via"),

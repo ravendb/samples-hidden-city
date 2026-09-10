@@ -18,6 +18,7 @@ import re
 from typing import Optional
 
 from ravendb import DocumentStore
+from ravendb.documents.queries.misc import SearchOperator
 
 from src.db.client import doc_to_dict
 
@@ -38,10 +39,15 @@ _FROM_TO_PL_RE = re.compile(
 )
 
 
-def _resolve_one(store: DocumentStore, phrase: str) -> Optional[str]:
+def resolve_one_airport(store: DocumentStore, phrase: str) -> Optional[str]:
     """Resolve a single city/airport phrase to exactly one IATA code, or None
     if it's empty, not found, or ambiguous (2+ matches) -- ambiguity is left
-    for the model to ask about, not guessed at."""
+    for the model to ask about, not guessed at.
+
+    Public so search_routes.py can also run city-name input through this same
+    resolution instead of failing silently on a non-IATA value the model
+    passed straight through — see the docstring on _resolve_iata there for why
+    that's needed and why it isn't a new LLM tool."""
     phrase = phrase.strip().strip(".,!?")
     if not phrase:
         return None
@@ -52,9 +58,15 @@ def _resolve_one(store: DocumentStore, phrase: str) -> Optional[str]:
         return phrase.upper() if doc else None
 
     with store.open_session() as session:
+        # operator=AND: a multi-word phrase like "Mexico City" must match every
+        # term, not any one of them -- RavenDB's default OR semantics would
+        # otherwise also match "Ho Chi Minh City" (shares the "City" term),
+        # turning an unambiguous query into a false ambiguous/ empty match.
         matches = [
             doc_to_dict(a)
-            for a in session.query_collection("Airports").search("city", phrase).take(3)
+            for a in session.query_collection("Airports")
+            .search("city", phrase, operator=SearchOperator.AND)
+            .take(3)
         ]
     if len(matches) == 1:
         return matches[0].get("iata")
@@ -69,10 +81,10 @@ def resolve_origin_destination(store: DocumentStore, user_message: str) -> Optio
     if not match:
         return None
 
-    origin = _resolve_one(store, match.group("origin"))
+    origin = resolve_one_airport(store, match.group("origin"))
     if not origin:
         return None
-    destination = _resolve_one(store, match.group("destination"))
+    destination = resolve_one_airport(store, match.group("destination"))
     if not destination:
         return None
     return {"origin": origin, "destination": destination}

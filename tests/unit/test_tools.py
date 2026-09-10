@@ -286,6 +286,9 @@ class TestSearchRoutes:
 
     @pytest.mark.asyncio
     async def test_carry_on_lowers_hidden_city_score(self):
+        # Checked baggage travels to the final destination, defeating the
+        # hidden-city trick -- so the checked-baggage risk (and its score
+        # penalty) applies when the user is NOT carry-on-only.
         routes = [
             {
                 "origin": "WAW",
@@ -301,12 +304,13 @@ class TestSearchRoutes:
         mock_store = self._mock_session_with_routes(routes)
 
         with patch("src.tools.search_routes.get_store", return_value=mock_store):
-            no_risk = await search_routes(origin="WAW", carry_on_only=False)
-            with_risk = await search_routes(origin="WAW", carry_on_only=True)
+            no_risk = await search_routes(origin="WAW", carry_on_only=True)
+            with_risk = await search_routes(origin="WAW", carry_on_only=False)
 
         no_risk_score = no_risk["routes"][0]["hidden_city"]["score"]
         with_risk_score = with_risk["routes"][0]["hidden_city"]["score"]
         assert with_risk_score < no_risk_score
+        assert "checked_baggage" not in no_risk["routes"][0]["hidden_city"]["risks"]
         assert "checked_baggage" in with_risk["routes"][0]["hidden_city"]["risks"]
 
     @pytest.mark.asyncio
@@ -536,7 +540,11 @@ class TestSearchRoutesHiddenCity:
             patch("src.tools.search_routes.get_store", return_value=mock_store),
             patch("src.tools.search_routes.load_airport_names", return_value={}),
         ):
-            result = await search_routes(origin="WAW", real_destination="AMS")
+            # carry_on_only=True keeps the checked-baggage risk penalty out of
+            # play, since this test is about hub selection, not risk scoring.
+            result = await search_routes(
+                origin="WAW", real_destination="AMS", carry_on_only=True
+            )
 
         assert result["count"] == 1
         assert result["routes"][0]["to"] == "ORD"
@@ -575,7 +583,7 @@ class TestSearchRoutesHiddenCity:
         assert "note" in result
 
     @pytest.mark.asyncio
-    async def test_carry_on_only_can_drop_candidate_below_threshold(self):
+    async def test_checked_baggage_can_drop_candidate_below_threshold(self):
         now = datetime.now(timezone.utc).isoformat()
         direct_route = {
             "origin": "WAW",
@@ -602,7 +610,7 @@ class TestSearchRoutesHiddenCity:
             patch("src.tools.search_routes.load_airport_names", return_value={}),
         ):
             result = await search_routes(
-                origin="WAW", real_destination="AMS", carry_on_only=True
+                origin="WAW", real_destination="AMS", carry_on_only=False
             )
 
         assert result["count"] == 0

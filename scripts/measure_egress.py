@@ -58,9 +58,9 @@ async def run() -> None:
     async with httpx.AsyncClient(base_url=AGENT_URL, timeout=60.0) as client:
         (await client.get("/health")).raise_for_status()
 
-        print("\n=== Egress Measurement Report ===\n")
+        print("\n=== Egress Estimate Report (token-count based, not a packet capture) ===\n")
         print(
-            f"{'Query':<40} {'Prompt bytes':>13} {'Naive bytes':>12} {'Reduction':>10}"
+            f"{'Query':<40} {'Est. prompt bytes':>18} {'Naive bytes':>12} {'Est. reduction':>14}"
         )
         print("-" * 80)
 
@@ -72,8 +72,9 @@ async def run() -> None:
             response.raise_for_status()
             data = response.json()
 
-            # Bytes sent to OpenAI = only the input tokens (user prompt + system)
-            # Context stays local in RavenDB — zero egress on retrieval
+            # Estimated bytes sent to OpenAI = input tokens (user prompt + system) × BYTES_PER_TOKEN.
+            # This is a token-count proxy, not a measured network payload.
+            # Context stays local in RavenDB — zero egress on retrieval.
             optimised_bytes = data["input_tokens"] * BYTES_PER_TOKEN
             reduction_pct = (1 - optimised_bytes / NAIVE_EGRESS_BYTES) * 100
 
@@ -81,8 +82,8 @@ async def run() -> None:
             total_naive += NAIVE_EGRESS_BYTES
 
             print(
-                f"{query['label']:<40} {optimised_bytes:>12,} {NAIVE_EGRESS_BYTES:>12,}"
-                f" {reduction_pct:>9.0f}%"
+                f"{query['label']:<40} {optimised_bytes:>18,} {NAIVE_EGRESS_BYTES:>12,}"
+                f" {reduction_pct:>13.0f}%"
             )
 
         n = len(TEST_QUERIES)
@@ -91,11 +92,12 @@ async def run() -> None:
         avg_reduction = (1 - avg_opt / avg_naive) * 100
 
         print("-" * 80)
-        print(f"{'Average':<40} {avg_opt:>12,} {avg_naive:>12,} {avg_reduction:>9.0f}%")
+        print(f"{'Average':<40} {avg_opt:>18,} {avg_naive:>12,} {avg_reduction:>13.0f}%")
 
-        print(f"\nNaive baseline:  {NAIVE_EGRESS_BYTES / 1024:.0f} KB/request (raw Travelpayouts bulk response)")
-        print(f"Optimised avg:   {avg_opt / 1024:.1f} KB/request (prompt only to OpenAI)")
-        print(f"Retrieval egress: 0 KB (RavenDB is in-cluster — local tool calls)")
+        print(f"\nNaive baseline:        {NAIVE_EGRESS_BYTES / 1024:.0f} KB/request (raw Travelpayouts bulk response, hardcoded estimate)")
+        print(f"Estimated optimised:   {avg_opt / 1024:.1f} KB/request (prompt only to OpenAI, derived from token count × {BYTES_PER_TOKEN} bytes/token)")
+        print(f"Estimated retrieval egress: 0 KB (RavenDB is in-cluster — local tool calls)")
+        print("\nNote: these are estimates derived from token counts, not measurements of actual network traffic.")
 
 
 if __name__ == "__main__":

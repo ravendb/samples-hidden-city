@@ -8,6 +8,11 @@
 #   .\start.ps1 -SkipSeed          # (Local) skip seeding when the database is already populated
 #   .\start.ps1 -Mode K8s -SkipBuild -SkipOperator   # (K8s) forwarded to start-k8s.ps1
 #   .\start.ps1 -DeleteCluster      # (K8s) delete the kind cluster and exit
+#
+# Requires PowerShell 7+ (pwsh.exe). Windows' built-in powershell.exe is 5.1,
+# whose native-command stderr handling differs enough (see Invoke-Quiet below)
+# that this script's semantics don't hold there -- run it via `pwsh.exe .\start.ps1`.
+#Requires -Version 7.0
 
 param(
     [ValidateSet("Local", "K8s", "")]
@@ -64,6 +69,20 @@ function Write-Warn($msg) {
     Write-Host "  WARN: $msg" -ForegroundColor Yellow
 }
 
+# PowerShell 5.1 wraps a native command's stderr lines into terminating
+# NativeCommandError objects whenever that stream is redirected (2>&1, 2>$null,
+# etc.) and $ErrorActionPreference = "Stop" is in effect -- even when the
+# command's own exit code is 0 and the stderr text is purely informational.
+# `uv --version` below is exactly this shape. Route any such call through this
+# helper, which drops $ErrorActionPreference to SilentlyContinue in its own
+# function scope only, so the redirect no longer aborts the script.
+# (Mirrors Invoke-Quiet in start-k8s.ps1 -- see that script for more detail.)
+function Invoke-Quiet {
+    param([Parameter(Mandatory)][scriptblock]$Command)
+    $ErrorActionPreference = "SilentlyContinue"
+    & $Command
+}
+
 # UV_VERSION from versions.env (repo root, single source of truth -- see its
 # header comment). Falls back to $null (unpinned) only if the file is missing,
 # so this script keeps working during initial checkout/bootstrap edge cases.
@@ -98,7 +117,7 @@ function Find-Uv {
 function Resolve-PinnedUv {
     $uv = Find-Uv
     if ($uv -and $UvVersion) {
-        $actual = & $uv --version 2>&1
+        $actual = Invoke-Quiet { & $uv --version 2>&1 }
         if ($actual -notmatch [regex]::Escape($UvVersion)) {
             Write-Warn "Found uv at $uv ($actual) but versions.env pins UV_VERSION=$UvVersion -- installing the pinned version instead..."
             $uv = $null
@@ -115,7 +134,7 @@ function Install-Uv {
     }
     $uv = Find-Uv
     if ($uv -and $UvVersion) {
-        $actual = & $uv --version 2>&1
+        $actual = Invoke-Quiet { & $uv --version 2>&1 }
         if ($actual -notmatch [regex]::Escape($UvVersion)) {
             Write-Warn "winget installed uv but not at the pinned version $UvVersion (got: $actual)"
             $uv = $null
@@ -139,7 +158,7 @@ function Install-Uv {
         Write-Error "uv installation finished but the executable could not be located. Reopen this terminal and try again."
         exit 1
     }
-    Write-Ok "uv installed ($(& $uv --version 2>&1))"
+    Write-Ok "uv installed ($(Invoke-Quiet { & $uv --version 2>&1 }))"
     return $uv
 }
 

@@ -13,6 +13,7 @@ __pycache__/
 dist/
 *.egg-info/
 .venv/
-*.log
 venv/
 *.log
+.claude/settings.local.json
+topology_files/

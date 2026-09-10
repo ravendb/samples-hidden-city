@@ -13,6 +13,7 @@ import os
 from dotenv import load_dotenv
 from ravendb.documents.subscriptions.options import (
     SubscriptionCreationOptions,
+    SubscriptionOpeningStrategy,
     SubscriptionWorkerOptions,
 )
 from ravendb.exceptions.raven_exceptions import RavenException
@@ -74,8 +75,17 @@ def run() -> None:
     subscription_name = _create_subscription_if_missing(store)
     log.info("Listening on subscription: %s", subscription_name)
 
+    # WAIT_FOR_FREE (not the OPEN_IF_FREE default): during a k8s RollingUpdate
+    # the old and new pod briefly coexist, both trying to open this single
+    # subscription. OPEN_IF_FREE rejects (crashes) the incoming pod instead of
+    # letting it queue up, which turns a routine rollout into a crash loop.
+    # WAIT_FOR_FREE makes the new pod wait for the old one to disconnect (or
+    # its k8s terminationGracePeriod to end) and take over cleanly.
     worker = store.subscriptions.get_subscription_worker(
-        SubscriptionWorkerOptions(subscription_name)
+        SubscriptionWorkerOptions(
+            subscription_name,
+            strategy=SubscriptionOpeningStrategy.WAIT_FOR_FREE,
+        )
     )
     try:
         future = worker.run(_handle_batch)

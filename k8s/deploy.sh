@@ -49,6 +49,25 @@ kubectl cluster-info --request-timeout=5s > /dev/null 2>&1 \
   && ok "kubectl connected to cluster" \
   || fail "kubectl cannot reach the cluster — check your kubeconfig"
 
+# This script (unlike start-k8s.sh) targets whatever cluster kubectl is
+# already pointed at -- it never creates or selects one itself, so on a
+# machine with multiple kube contexts a stale/wrong current-context silently
+# deploys to the wrong cluster with no warning. Surface it and require an
+# explicit yes before doing anything that mutates cluster state. Set
+# DEPLOY_SKIP_CONTEXT_CONFIRM=true to bypass in non-interactive runs (CI)
+# where the caller has already verified the context out-of-band.
+CURRENT_CONTEXT=$(kubectl config current-context 2>/dev/null || echo "<none>")
+echo "    Target kubectl context: $CURRENT_CONTEXT"
+if [[ "${DEPLOY_SKIP_CONTEXT_CONFIRM:-}" != "true" ]]; then
+  if [[ -t 0 ]]; then
+    read -r -p "    Deploy to this context? [y/N] " _confirm_context
+    [[ "$_confirm_context" =~ ^[Yy]$ ]] || fail "Aborted — run 'kubectl config use-context <name>' to pick the right cluster, then re-run."
+  else
+    fail "Non-interactive shell and no context confirmed — set DEPLOY_SKIP_CONTEXT_CONFIRM=true to deploy to '$CURRENT_CONTEXT' anyway."
+  fi
+fi
+ok "Deploying to context: $CURRENT_CONTEXT"
+
 if [[ ! -f k8s/secrets.local.yaml ]]; then
   fail "k8s/secrets.local.yaml not found. Run: cp k8s/secrets.yaml k8s/secrets.local.yaml && edit it"
 fi
@@ -59,7 +78,9 @@ if [[ "$SKIP_OPERATOR" == "true" ]]; then
   warn "Skipping operator install (--skip-operator)"
 else
   step "Installing RavenDB Kubernetes Operator"
-  bash k8s/operator/install.sh
+  # Context was already confirmed above -- don't ask a second time for the
+  # same cluster.
+  DEPLOY_SKIP_CONTEXT_CONFIRM=true bash k8s/operator/install.sh
 fi
 
 # ── step 2: docker build ──────────────────────────────────────────────────────

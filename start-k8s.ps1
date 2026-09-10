@@ -22,6 +22,11 @@
 # cluster even exists. Nothing about the cluster/operator/RavenDB deploy can
 # fail partway through for a missing secret or cert.
 # Operator project: https://github.com/ravendb/ravendb-operator
+#
+# Requires PowerShell 7+ (pwsh.exe). Windows' built-in powershell.exe is 5.1,
+# whose native-command stderr handling differs enough (see Invoke-Quiet below)
+# that this script's semantics don't hold there -- run it via `pwsh.exe .\start-k8s.ps1`.
+#Requires -Version 7.0
 
 param(
     [switch]$SkipBuild,
@@ -1058,9 +1063,12 @@ Write-Ok "Agent deployment ready"
 # not a single "ravendb-cluster-svc" -- pick the first configured tag. RavenDB
 # only listens on HTTPS (443), even in mode: None (self-signed, not plaintext).
 # Local port 8081 (not 8080) deliberately avoids clashing with Local mode's
-# docker-compose RavenDB, which also binds host port 8080 -- run
-# `.\start.ps1 -Mode Local` and `.\start.ps1 -Mode K8s` side by side without
-# either stealing the other's port.
+# docker-compose RavenDB, which also binds host port 8080 -- but this only
+# avoids the RavenDB port clash. `.\start.ps1 -Mode Local` and
+# `.\start.ps1 -Mode K8s` still CANNOT run at the same time: both bind the
+# agent to local port 8001 (Local mode's uvicorn, K8s mode's port-forward of
+# svc/agent-svc), so the second one to start fails to bind that port. Stop one
+# mode fully before starting the other.
 Write-Host "`n  Starting port-forwards..." -ForegroundColor Gray
 
 $firstNodeTag = (Get-RavenNodeTags | Select-Object -First 1)

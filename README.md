@@ -12,18 +12,20 @@
 
 ## Local setup
 
-A few steps are required to run the application locally. 
+A few steps are required to run the application locally.
 
 1. Check out the Git repository
 2. Install prerequisites:
       a. [Docker](https://docs.docker.com/get-docker/) (Docker Desktop on macOS, Docker Engine or Docker Desktop on Linux)
-         
-3. `.\start.ps1` and pick a mode when prompted
-4. Before the first run, both modes prompt you interactively in the terminal (Enter to skip an optional value) for:
+3. Start the app and pick a mode when prompted:
+      - **Windows**: `.\start.ps1` (requires PowerShell 7+ — run via `pwsh.exe`, not the built-in 5.1 `powershell.exe`)
+      - **macOS / Linux / WSL2 — Kubernetes mode**: `bash k8s/start-k8s.sh`
+      - **macOS / Linux / WSL2 — Local mode**: `bash start-local.sh`
+4. Before the first run, both modes prompt you to enter:
    a. `OPENAI_API_KEY`: required, the agent won't start without it ([platform.openai.com](https://platform.openai.com/))
    b. `TRAVELPAYOUTS_TOKEN`: optional; without it the agent falls back to fixture data seeded by `scripts/seed_local.py`
-   c. The RavenDB license is picked up silently from `license.json` in the repo root if present, otherwise Local mode runs RavenDB in Developer Mode (3 GB / 1 node limit) 
-5. RavenDB Studio is available at `http://localhost:8080` (Local mode) or `https://localhost:8081` (Kubernetes mode, self-signed cert, browser will warn). 
+   c. The RavenDB license - can be picked up silently from `license.json` in the repo root. 
+5. RavenDB Studio is available at `http://localhost:8080` (Local mode) or `https://localhost:8081` (Kubernetes mode). 
 
 
 ## Features used

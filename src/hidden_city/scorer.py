@@ -2,7 +2,11 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 
-MIN_SAVINGS_PLN = 100.0
+# docs/hidden-city.md specifies a 100 PLN minimum savings threshold, but route
+# prices in this codebase (src/db/models.py TypicalPrice, scraper, get_live_prices,
+# seed data) are all denominated in USD, not PLN. 100 PLN ≈ 25 USD; using 100 as a
+# USD threshold would make the real-world gate ~4x stricter than documented.
+MIN_SAVINGS_USD = 25.0
 MIN_SCORE_TO_SURFACE = 0.5
 
 
@@ -46,7 +50,7 @@ class HiddenCityCandidate:
 
     @property
     def should_surface(self) -> bool:
-        return self.score >= MIN_SCORE_TO_SURFACE and self.savings >= MIN_SAVINGS_PLN
+        return self.score >= MIN_SCORE_TO_SURFACE and self.savings >= MIN_SAVINGS_USD
 
 
 def score_candidate(

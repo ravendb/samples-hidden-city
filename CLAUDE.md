@@ -99,7 +99,11 @@ and when. Nothing is blindly injected. Only the user's prompt leaves the cluster
 .\start-k8s.ps1 -SkipBuild -SkipOperator # Windows: fast re-run, skips image rebuild + operator reinstall
 bash k8s/start-k8s.sh                    # macOS/Linux (or WSL2 on Windows): same flow, --skip-build/--skip-operator/--delete-cluster
 
-# Local dev (manual steps -- what start.ps1 -Mode Local automates)
+# Local mode (docker-compose stack: venv + deps via uv, RavenDB, seed, agent)
+.\start.ps1 -Mode Local                  # Windows
+bash start-local.sh                      # macOS/Linux (or WSL2 on Windows): same flow, --skip-seed/--worker
+
+# Local dev (manual steps -- what start.ps1 -Mode Local / start-local.sh automate)
 docker-compose up -d ravendb
 python -m scripts.seed_local          # seed airports + fixture routes
 uvicorn src.agent.app:app --reload --port 8001    # start agent on :8001
@@ -155,7 +159,7 @@ Competing stacks need a separate vector DB + document DB + blob store.
   "id": "sessions/user-42-sess-7",
   "user_id": "user-42",
   "turns": [
-    { "role": "user", "content": "Find hidden city WAW→NYC next Friday" },
+    { "role": "user", "content": "Find hidden city WAW→JFK next Friday" },
     { "role": "assistant", "content": "..." }
   ],
   "active_constraints": { "carry_on_only": true, "max_stops": 1 },

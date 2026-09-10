@@ -4,7 +4,7 @@ from src.hidden_city.scorer import (
     RiskFactor,
     find_candidates,
     score_candidate,
-    MIN_SAVINGS_PLN,
+    MIN_SAVINGS_USD,
     MIN_SCORE_TO_SURFACE,
 )
 
@@ -66,8 +66,8 @@ class TestHiddenCityCandidate:
         assert c.should_surface is True
 
     def test_should_surface_false_below_min_savings(self):
-        # savings = 50 PLN, below MIN_SAVINGS_PLN
-        c = self._make(1000.0, 1000.0 - MIN_SAVINGS_PLN + 1)
+        # savings = 1 USD below MIN_SAVINGS_USD
+        c = self._make(1000.0, 1000.0 - MIN_SAVINGS_USD + 1)
         assert c.should_surface is False
 
     def test_should_surface_false_below_min_score(self):
@@ -85,7 +85,7 @@ class TestFindCandidates:
         through_routes = [
             {"destination": "JFK", "price": 1200.0},   # 57% savings → score 0.571 > 0.5
             {"destination": "BOS", "price": 2900.0},   # hidden more expensive
-            {"destination": "ORD", "price": 2750.0},   # savings < MIN_SAVINGS_PLN
+            {"destination": "ORD", "price": 2750.0},   # savings small, score well below MIN_SCORE_TO_SURFACE
         ]
         candidates = find_candidates("WAW", "LHR", 2800.0, through_routes, [])
         assert len(candidates) == 1
