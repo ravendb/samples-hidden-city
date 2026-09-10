@@ -57,10 +57,26 @@ class AgentResult:
     iterations: int = 0
     tool_token_warnings: list[str] = field(default_factory=list)
     grounding_warnings: list[str] = field(default_factory=list)
+    openai_egress_bytes: int | None = None
 
     @property
     def total_tokens(self) -> int:
         return self.input_tokens + self.output_tokens
+
+
+def _read_tx_bytes() -> int | None:
+    """Actual bytes transmitted on this process's network interface, read from the
+    kernel counter -- not derived from token counts. This is the only place data
+    leaves the cluster during a turn (the OpenAI call), so a before/after delta
+    around it measures egress directly instead of assuming it from `usage.prompt_tokens`.
+    Returns None where the counter isn't available (non-Linux dev machines) so callers
+    degrade to reporting "not measured" rather than a fabricated number."""
+    path = os.getenv("EGRESS_IFACE_STATS_PATH", "/sys/class/net/eth0/statistics/tx_bytes")
+    try:
+        with open(path) as f:
+            return int(f.read().strip())
+    except OSError:
+        return None
 
 
 def _estimate_tokens(text: str) -> int:
@@ -188,11 +204,14 @@ async def run_agent(
             + prior_turns
             + [{"role": "user", "content": user_content}]
         )
+        tx_before = _read_tx_bytes()
         response = await client.chat.completions.create(
             model=os.getenv("LLM_MODEL", _DEFAULT_MODEL),
             max_tokens=MAX_RESPONSE_TOKENS,
             messages=messages,
         )
+        tx_after = _read_tx_bytes()
+        egress_bytes = tx_after - tx_before if tx_before is not None and tx_after is not None else None
         text = response.choices[0].message.content
         if text is not None:
             known_data = system_content + user_content
@@ -207,6 +226,7 @@ async def run_agent(
                 tool_calls=1,
                 iterations=1,
                 grounding_warnings=[warning] if ungrounded else [],
+                openai_egress_bytes=egress_bytes,
             )
         # No text content (unexpected without tools offered) -- fall through to
         # the normal loop below rather than return something broken.
@@ -226,12 +246,14 @@ async def run_agent(
     token_warnings: list[str] = []
     grounding_warnings: list[str] = []
     tool_result_texts: list[str] = []
+    total_egress_bytes: int | None = 0
 
     for iteration in range(1, MAX_ITERATIONS + 1):
         # Force at least one tool call on the first turn — otherwise "auto" lets the
         # model skip search_routes/get_live_prices entirely and answer from parametric
         # knowledge, which is the main way ungrounded city names/prices sneak in.
         tool_choice = "required" if iteration == 1 else "auto"
+        tx_before = _read_tx_bytes()
         response = await client.chat.completions.create(
             model=os.getenv("LLM_MODEL", _DEFAULT_MODEL),
             max_tokens=MAX_RESPONSE_TOKENS,
@@ -239,6 +261,11 @@ async def run_agent(
             tool_choice=tool_choice,
             messages=messages,
         )
+        tx_after = _read_tx_bytes()
+        if total_egress_bytes is not None and tx_before is not None and tx_after is not None:
+            total_egress_bytes += tx_after - tx_before
+        else:
+            total_egress_bytes = None
 
         total_input += response.usage.prompt_tokens
         total_output += response.usage.completion_tokens
@@ -271,6 +298,7 @@ async def run_agent(
                 iterations=iteration,
                 tool_token_warnings=token_warnings,
                 grounding_warnings=grounding_warnings,
+                openai_egress_bytes=total_egress_bytes,
             )
 
         if choice.finish_reason == "tool_calls":
@@ -347,6 +375,7 @@ async def stream_agent(
             + prior_turns
             + [{"role": "user", "content": user_content}]
         )
+        tx_before = _read_tx_bytes()
         fp_stream = await client.chat.completions.create(
             model=os.getenv("LLM_MODEL", _DEFAULT_MODEL),
             max_tokens=MAX_RESPONSE_TOKENS,
@@ -367,6 +396,10 @@ async def stream_agent(
             if delta.content:
                 fp_content.append(delta.content)
                 yield sse({"type": "delta", "text": delta.content})
+        # Measured after the stream is fully drained, not right after create() --
+        # create(stream=True) returns before any chunk has actually crossed the wire.
+        tx_after = _read_tx_bytes()
+        egress_bytes = tx_after - tx_before if tx_before is not None and tx_after is not None else None
 
         final_text = "".join(fp_content)
         if final_text:
@@ -385,6 +418,7 @@ async def stream_agent(
                 "total_tokens": fp_input + fp_output,
                 "tool_calls": 1,
                 "grounding_warnings": ungrounded,
+                "openai_egress_bytes": egress_bytes,
             })
             return
         # No content streamed (unexpected) -- fall through to the normal loop below.
@@ -398,6 +432,7 @@ async def stream_agent(
     total_input, total_output, tool_calls_count = 0, 0, 0
     tool_tokens_used = 0  # cumulative across the WHOLE turn — see run_agent
     tool_result_texts: list[str] = []
+    total_egress_bytes: int | None = 0
 
     for iteration in range(1, MAX_ITERATIONS + 1):
         accumulated_content: list[str] = []
@@ -406,6 +441,7 @@ async def stream_agent(
 
         # Same first-turn grounding guard as run_agent — see comment there.
         tool_choice = "required" if iteration == 1 else "auto"
+        tx_before = _read_tx_bytes()
         stream = await client.chat.completions.create(
             model=os.getenv("LLM_MODEL", _DEFAULT_MODEL),
             max_tokens=MAX_RESPONSE_TOKENS,
@@ -443,6 +479,13 @@ async def stream_agent(
                         if tc_delta.function.arguments:
                             accumulated_tool_calls[idx]["arguments"] += tc_delta.function.arguments
 
+        # Measured after the stream is fully drained -- see the fast-path comment above.
+        tx_after = _read_tx_bytes()
+        if total_egress_bytes is not None and tx_before is not None and tx_after is not None:
+            total_egress_bytes += tx_after - tx_before
+        else:
+            total_egress_bytes = None
+
         if finish_reason == "stop":
             final_text = "".join(accumulated_content)
             known_data = system_content + user_message + "".join(tool_result_texts)
@@ -461,6 +504,7 @@ async def stream_agent(
                 "total_tokens": total_input + total_output,
                 "tool_calls": tool_calls_count,
                 "grounding_warnings": ungrounded,
+                "openai_egress_bytes": total_egress_bytes,
             })
             return
 

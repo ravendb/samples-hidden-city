@@ -387,7 +387,11 @@ ensure_ravendb_certs() {
     # currently active tag is the actual risk (a node that can't be reached).
     local expected=() tag
     for tag in "${node_tags[@]}"; do
-      expected+=("DNS:${tag}.hiddencity.local" "DNS:${tag}-tcp.hiddencity.local")
+      expected+=(
+        "DNS:${tag}.hiddencity.local"
+        "DNS:${tag}-tcp.hiddencity.local"
+        "DNS:ravendb-${tag}.${NS}.svc.cluster.local"
+      )
     done
     local actual_joined
     actual_joined=$(openssl x509 -in "$certs_dir/server.crt" -noout -ext subjectAltName 2>/dev/null |
@@ -438,9 +442,15 @@ ensure_ravendb_certs() {
   mkdir -p "$certs_dir"
   echo "  Generating self-signed RavenDB TLS chain in k8s/ravendb/certs..."
 
+  # Also covers each node's Kubernetes-native Service DNS name (ravendb-<tag>)
+  # even though nothing uses it yet (RAVENDB_URL still connects via the
+  # hiddencity.local hostname the CoreDNS step resolves -- see that step's
+  # comment for why removing it isn't safe without changing publicServerUrl
+  # too). Adding it here is a no-op today and lets a future switch to the
+  # native name happen without a cert regen.
   local san_entries="" tag
   for tag in "${node_tags[@]}"; do
-    san_entries+="DNS:${tag}.hiddencity.local,DNS:${tag}-tcp.hiddencity.local,"
+    san_entries+="DNS:${tag}.hiddencity.local,DNS:${tag}-tcp.hiddencity.local,DNS:ravendb-${tag}.${NS}.svc.cluster.local,"
   done
   san_entries="${san_entries%,}"
 

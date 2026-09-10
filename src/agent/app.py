@@ -13,6 +13,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from ravendb.documents.subscriptions.options import (
     SubscriptionCreationOptions,
     SubscriptionOpeningStrategy,
@@ -53,6 +54,10 @@ _UI_PATH     = _CHAT_DIR / "index.html"
 _LANDING_PATH = _CHAT_DIR / "landing.html"
 _SETUP_PATH   = _CHAT_DIR / "setup.html"
 _PROFILE_PATH = _CHAT_DIR / "profile.html"
+
+# Leaflet, marked, and the world outline GeoJSON are vendored here so the chat UI
+# never depends on unpkg/jsDelivr/CARTO tile CDNs staying up or key-free (see D5).
+app.mount("/chat-assets", StaticFiles(directory=_CHAT_DIR / "vendor"), name="chat-assets")
 
 
 _SCRAPE_MARKER = Path(tempfile.gettempdir()) / "hidden_city_last_scrape_ppid.txt"
@@ -265,6 +270,7 @@ class ChatResponse(BaseModel):
     output_tokens: int
     total_tokens: int
     tool_calls: int
+    openai_egress_bytes: int | None = None
 
 
 def _load_conversation_context(user_id: str, session_id: str) -> tuple[list[dict], dict]:
@@ -558,6 +564,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
         output_tokens=result.output_tokens,
         total_tokens=result.total_tokens,
         tool_calls=result.tool_calls,
+        openai_egress_bytes=result.openai_egress_bytes,
     )
 
 

@@ -69,7 +69,7 @@ The following technologies were used to build this application:
 
 Kubernetes mode automates cert-manager, ingress-nginx, the RavenDB Operator, and the app deployment end to end, including the RavenDB cluster's TLS certificate chain, which `start-k8s.ps1` generates locally as a self-signed CA/server/client chain via `openssl` (see `Ensure-RavenDbCerts` in the script) and applies as Kubernetes secrets automatically. No manual Setup Wizard step or `kubectl create secret` command is required.
 
-See [`docs/architecture.md`](docs/architecture.md) for the full token/egress cost breakdown across four infrastructure stages, and [`docs/hidden-city.md`](docs/hidden-city.md) for the hidden-city detection algorithm spec.
+See [`docs/architecture.md`](docs/architecture.md) for the full token/egress cost breakdown across four infrastructure stages, and [`docs/hidden-city.md`](docs/hidden-city.md) for the hidden-city detection algorithm spec. [`CLAUDE.md`](CLAUDE.md) is a separate, agent/contributor-facing reference (repo conventions, what the agent may/may not do) rather than another copy of this overview — no need to read it unless you're modifying the code.
 
 ## Legal Note
 

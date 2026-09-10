@@ -248,6 +248,31 @@ no polling loop, no message broker.
 | 3 — ES+pgvector+Redis+Kafka | 5 | ~$1,190 |
 | 4 — RavenDB in-cluster | **1** | **~$90** |
 
+**Caveat:** the table above isn't apples-to-apples — Stages 2-3 price fully
+*managed* AWS services (ElastiCache, RDS, MSK, managed Elasticsearch), while
+Stage 4's ~$90/month is 3 self-hosted EC2 nodes running RavenDB yourself. Part
+of that 13× gap is "managed vs. self-hosted," not "RavenDB vs. everything
+else." Pricing every stage's components as self-hosted EC2 instead (rough
+on-demand rates, no reserved/spot discount, HA node counts unchanged) narrows
+it considerably:
+
+| Stage | Components (self-hosted) | Monthly infra cost |
+|-------|---------------------------|--------------------|
+| 2 — Redis (2×t3.small) + Postgres (2×t3.medium) + Celery (2×t3.small, unchanged) | 3 | ~$120 |
+| 3 — ES (2×t3.medium) + pgvector-on-Postgres (2×t3.medium) + Redis (2×t3.small) + Kafka (3×t3.medium) + consumer pods (2×t3.medium, unchanged) | 5 | ~$330 |
+| 4 — RavenDB in-cluster (3×t3.medium) | **1** | **~$90** |
+
+Self-hosted-vs-self-hosted, RavenDB is still ~1.3-3.7× cheaper than Stages
+2-3 rather than ~2-13× — and that gap is now genuinely about component count,
+not deployment model. The bigger point the raw dollar figures miss either
+way: self-hosting Redis/Postgres/ES/Kafka yourself means *you* now own their
+patching, backups, and HA failover — exactly what the RavenDB Kubernetes
+Operator automates for the single component Stage 4 runs (see "Kubernetes
+Operator" below). The managed-service comparison in the first table isn't
+wrong to include — it's the realistic choice most teams actually make rather
+than hand-rolling HA Kafka — but it should be read as "managed convenience
+costs more," not as RavenDB being 13× cheaper on compute alone.
+
 ### What RavenDB eliminates from your stack
 
 | Replaced component | Why you no longer need it |
@@ -279,6 +304,11 @@ hundreds of price records — easily 40 000+ tokens when pasted unfiltered into 
 city score — roughly 5 fields × 5 routes = ~300 tokens. The model never sees the
 raw response.
 
+(These figures mirror `MAX_RESPONSE_TOKENS`/`WARN_TOOL_TOKENS` in
+`src/agent/loop.py`, restated here as a narrative rather than a duplicate
+source of truth — see CLAUDE.md's "Token Budget per Request" for the same
+table without the cost-story framing.)
+
 ---
 
 ## Kubernetes Operator
@@ -297,32 +327,13 @@ state. The RavenDB Kubernetes Operator reconciles it continuously:
 - **Admission webhooks** — reject invalid cluster configurations before they
   are applied.
 
-```yaml
-apiVersion: ravendb.ravendb.io/v1
-kind: RavenDBCluster
-metadata:
-  name: ravendb-cluster
-  namespace: hidden-city
-spec:
-  nodes:
-    - tag: a
-      publicServerUrl: https://a.hiddencity.local:443
-      publicServerUrlTcp: tcp://a-tcp.hiddencity.local:443
-    - tag: b
-      publicServerUrl: https://b.hiddencity.local:443
-      publicServerUrlTcp: tcp://b-tcp.hiddencity.local:443
-    - tag: c
-      publicServerUrl: https://c.hiddencity.local:443
-      publicServerUrlTcp: tcp://c-tcp.hiddencity.local:443
-  mode: None
-  storage:
-    data:
-      size: 50Gi
-```
-
 Deployed via Helm (`helm upgrade --install ravendb-cluster
 ravendb-operator/ravendb-cluster -f k8s/ravendb/values.yaml`), not a raw
 `kubectl apply` — the operator handles everything else after that.
+`k8s/ravendb/values.yaml` is the single source of truth for the spec that
+actually gets deployed; it currently declares **one node** (`tag: a`, with
+`b`/`c` commented out) because the demo license doesn't permit multi-node
+clusters — see that file for the restore-to-3-node instructions.
 
 ---
 

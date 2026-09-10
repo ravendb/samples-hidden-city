@@ -388,7 +388,10 @@ function Ensure-RavenDbCerts {
         # and values.yaml later scaled down to just a for a license limit --
         # RavenDB doesn't care about unused SAN entries). Only a MISSING SAN
         # for a currently active tag is the actual risk.
-        $expectedSans = ($NodeTags | ForEach-Object { "DNS:$_.hiddencity.local", "DNS:$_-tcp.hiddencity.local" }) | Sort-Object
+        $expectedSans = ($NodeTags | ForEach-Object {
+            "DNS:$_.hiddencity.local", "DNS:$_-tcp.hiddencity.local",
+            "DNS:ravendb-$_.$NS.svc.cluster.local"
+        }) | Sort-Object
         $sanOutput = & $openssl x509 -in "$CertsDir\server.crt" -noout -ext subjectAltName 2>$null
         $actualSans = [regex]::Matches(($sanOutput -join " "), '(DNS|IP Address):[^\s,]+') |
             ForEach-Object { $_.Value } | Sort-Object
@@ -471,7 +474,15 @@ function Ensure-RavenDbCerts {
     New-Item -ItemType Directory -Force -Path $CertsDir | Out-Null
     Write-Host "  Generating self-signed RavenDB TLS chain in k8s/ravendb/certs..." -ForegroundColor Gray
 
-    $sanEntries = ($NodeTags | ForEach-Object { "DNS:$_.hiddencity.local,DNS:$_-tcp.hiddencity.local" }) -join ","
+    # Also covers each node's Kubernetes-native Service DNS name (ravendb-<tag>)
+    # even though nothing uses it yet (RAVENDB_URL still connects via the
+    # hiddencity.local hostname the CoreDNS step resolves -- see that step's
+    # comment for why removing it isn't safe without changing publicServerUrl
+    # too). Adding it here is a no-op today and lets a future switch to the
+    # native name happen without a cert regen.
+    $sanEntries = ($NodeTags | ForEach-Object {
+        "DNS:$_.hiddencity.local,DNS:$_-tcp.hiddencity.local,DNS:ravendb-$_.$NS.svc.cluster.local"
+    }) -join ","
 
     @"
 [req]
