@@ -38,7 +38,7 @@ TOOL_DEFINITIONS = [
                     },
                     "carry_on_only": {
                         "type": "boolean",
-                        "description": "If true, apply checked-baggage risk penalty to hidden city candidates.",
+                        "description": "If false (i.e. the user has checked baggage), apply the checked-baggage risk penalty to hidden city candidates.",
                     },
                     "budget_max": {
                         "type": "number",
