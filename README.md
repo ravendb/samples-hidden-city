@@ -17,6 +17,9 @@ A few steps are required to run the application locally.
 1. Check out the Git repository
 2. Install prerequisites:
       a. [Docker](https://docs.docker.com/get-docker/) (Docker Desktop on macOS, Docker Engine or Docker Desktop on Linux)
+      b. **Windows only**: PowerShell 7+ (`pwsh.exe`) — the built-in PowerShell 5.1 (`powershell.exe`) is not supported
+      c. Free local ports: `8001` (agent), `8080` + `38888` (RavenDB, Local mode) or `8081` (RavenDB Studio, Kubernetes mode)
+      d. Resources: ~5 GB free disk (Docker images, RavenDB data volume, Python venv) and 4 GB+ RAM available to Docker
 3. Start the app and pick a mode when prompted:
       - **Windows**: `.\start.ps1` (requires PowerShell 7+ — run via `pwsh.exe`, not the built-in 5.1 `powershell.exe`)
       - **macOS / Linux / WSL2 — Kubernetes mode**: `bash k8s/start-k8s.sh`

@@ -66,10 +66,8 @@ if [ -x "$PY" ]; then
   fi
 fi
 if [ ! -x "$PY" ]; then
-  echo -e "\n  Creating venv (Python 3.11-3.13)..."
-  "$UV" venv --python ">=3.11,<3.14" "$root/.venv"
-  echo "  Installing dependencies..."
-  "$UV" pip install --python "$PY" -e ".[dev]"
+  echo -e "\n  Creating venv and installing dependencies from uv.lock..."
+  "$UV" sync --frozen --extra dev --python ">=3.11,<3.14"
   ok "venv ready"
 fi
 

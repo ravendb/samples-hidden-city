@@ -196,19 +196,13 @@ if (-not (Test-Path $python)) {
     if (-not $uv) {
         $uv = Install-Uv
     }
-    Write-Host "`n  Creating venv (Python 3.11-3.13)..." -ForegroundColor Gray
-    & $uv venv --python ">=3.11,<3.14" "$root\.venv"
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "Failed to create venv. Install Python 3.11, 3.12, or 3.13 and try again."
-        exit 1
-    }
-    Write-Host "  Installing dependencies..." -ForegroundColor Gray
+    Write-Host "`n  Creating venv and installing dependencies from uv.lock..." -ForegroundColor Gray
     Push-Location $root
-    & $uv pip install --python "$root\.venv\Scripts\python.exe" -e ".[dev]"
+    & $uv sync --frozen --extra dev --python ">=3.11,<3.14"
     $installExit = $LASTEXITCODE
     Pop-Location
     if ($installExit -ne 0) {
-        Write-Error "Failed to install dependencies."
+        Write-Error "Failed to create venv / install dependencies. Install Python 3.11, 3.12, or 3.13 and try again."
         exit 1
     }
     Write-Ok "venv ready"
