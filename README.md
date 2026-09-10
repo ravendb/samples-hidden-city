@@ -24,7 +24,7 @@ A few steps are required to run the application locally.
 4. Before the first run, both modes prompt you to enter:
    a. `OPENAI_API_KEY`: required, the agent won't start without it ([platform.openai.com](https://platform.openai.com/))
    b. `TRAVELPAYOUTS_TOKEN`: optional; without it the agent falls back to fixture data seeded by `scripts/seed_local.py`
-   c. The RavenDB license - can be picked up silently from `license.json` in the repo root. 
+   c. The RavenDB license - can be picked up silently from `license.json` in the repo root. Get a free Community license at [ravendb.net/download](https://ravendb.net/download).
 5. RavenDB Studio is available at `http://localhost:8080` (Local mode) or `https://localhost:8081` (Kubernetes mode). 
 
 
