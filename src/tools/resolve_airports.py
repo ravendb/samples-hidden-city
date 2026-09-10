@@ -22,7 +22,7 @@ from ravendb.documents.queries.misc import SearchOperator
 
 from src.db.client import doc_to_dict
 
-_IATA_RE = re.compile(r"^[A-Za-z]{3}$")
+IATA_RE = re.compile(r"^[A-Za-z]{3}$")
 
 # Deliberately simple (English "from X to Y" / Polish "z X do Y") — anything
 # more complex (typos, multi-leg, relative references like "back home") just
@@ -52,7 +52,7 @@ def resolve_one_airport(store: DocumentStore, phrase: str) -> Optional[str]:
     if not phrase:
         return None
 
-    if _IATA_RE.match(phrase):
+    if IATA_RE.match(phrase):
         with store.open_session() as session:
             doc = session.load(f"airports/{phrase.upper()}")
         return phrase.upper() if doc else None

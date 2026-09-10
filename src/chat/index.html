@@ -202,9 +202,32 @@
     box-shadow: 0 2px 8px rgba(0,0,0,0.5) !important;
   }
   .leaflet-tooltip-top::before { border-top-color: var(--border) !important; }
+
+  /* Price drop alerts -- pushed over /ws/alerts, backed by a RavenDB Data
+     Subscription on the PriceAlerts collection (see src/agent/app.py). */
+  #alert-toasts {
+    position: fixed; top: 16px; right: 16px; z-index: 2000;
+    display: flex; flex-direction: column; gap: 8px;
+    max-width: min(340px, calc(100vw - 32px));
+  }
+  .price-alert-toast {
+    background: var(--surface2); border: 1px solid var(--accent);
+    border-radius: var(--radius); padding: 10px 14px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    font-size: 0.8rem; color: var(--text);
+    animation: alert-in 0.2s ease-out;
+  }
+  .price-alert-toast .alert-title {
+    font-weight: 600; color: var(--accent2); margin-bottom: 2px;
+  }
+  .price-alert-toast .alert-price {
+    color: var(--text-muted); font-size: 0.75rem;
+  }
+  @keyframes alert-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
 </style>
 </head>
 <body>
+<div id="alert-toasts"></div>
 <div id="app">
  <div id="main-col">
   <header>
@@ -659,6 +682,31 @@ async function sendMessage() {
 function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
+
+// ---- Price drop alerts: pushed live via /ws/alerts (RavenDB Data
+// Subscription on the PriceAlerts collection -- no polling, see
+// src/agent/app.py and src/worker/run.py). ----
+function showAlertToast(alert) {
+  const el = document.createElement('div');
+  el.className = 'price-alert-toast';
+  const via = alert.via ? ` via ${escHtml(alert.via)}` : '';
+  el.innerHTML = `
+    <div class="alert-title">✈ Price drop: ${escHtml(alert.origin)} → ${escHtml(alert.destination)}${via}</div>
+    <div class="alert-price">$${alert.old_price} → $${alert.new_price} · score ${Number(alert.hidden_city_score).toFixed(2)}</div>
+  `;
+  document.getElementById('alert-toasts').appendChild(el);
+  setTimeout(() => el.remove(), 8000);
+}
+
+function connectAlertSocket() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws/alerts`);
+  ws.onmessage = (ev) => {
+    try { showAlertToast(JSON.parse(ev.data)); } catch (e) { /* ignore malformed payload */ }
+  };
+  ws.onclose = () => setTimeout(connectAlertSocket, 3000);
+}
+connectAlertSocket();
 
 sendBtn.addEventListener('click', sendMessage);
 inputEl.addEventListener('keydown', e => {

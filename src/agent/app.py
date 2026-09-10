@@ -5,13 +5,20 @@ Session loading/saving happens here; the loop itself is stateless.
 import asyncio
 import logging
 import os
+import socket
 import tempfile
 import threading
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
+from ravendb.documents.subscriptions.options import (
+    SubscriptionCreationOptions,
+    SubscriptionOpeningStrategy,
+    SubscriptionWorkerOptions,
+)
+from ravendb.exceptions.raven_exceptions import RavenException
 
 _ENV_FILE = Path(__file__).parent.parent.parent / ".env"
 _LICENSE_FILE = Path(__file__).parent.parent.parent / "license.json"
@@ -88,6 +95,73 @@ def _run_scraper_background() -> None:
         log.exception("Travelpayouts fetch failed at startup")
 
 
+# ---- Price drop alerts: /ws/alerts fans a RavenDB Data Subscription on the
+# PriceAlerts collection (populated by src/worker/run.py) out to connected
+# browsers. Each agent pod runs its own subscription under a name unique to
+# that pod (hostname), so with k8s/agent/deployment.yaml's replicas: 2 every
+# pod gets a full independent replay of the collection instead of the two
+# pods splitting a single shared subscription's documents between them --
+# a browser connected to either pod's websocket sees every alert. Still push
+# end to end, no polling. ----
+_alert_websockets: set[WebSocket] = set()
+
+
+async def _broadcast_alert(alert: dict) -> None:
+    dead = []
+    for ws in list(_alert_websockets):
+        try:
+            await ws.send_json(alert)
+        except Exception:
+            dead.append(ws)
+    for ws in dead:
+        _alert_websockets.discard(ws)
+
+
+def _run_alert_subscription_worker(loop: asyncio.AbstractEventLoop) -> None:
+    subscription_name = f"hidden-city-alerts-ui-{socket.gethostname()}"
+    store = get_store()
+    try:
+        store.subscriptions.create_for_options(
+            SubscriptionCreationOptions(query="from PriceAlerts", name=subscription_name)
+        )
+    except RavenException as e:
+        if "already in use" not in str(e).lower():
+            log.exception("Failed to create alert subscription %r", subscription_name)
+            return
+
+    def _handle_batch(batch) -> None:
+        for item in batch.items:
+            asyncio.run_coroutine_threadsafe(_broadcast_alert(item.result), loop)
+
+    worker = store.subscriptions.get_subscription_worker(
+        SubscriptionWorkerOptions(
+            subscription_name,
+            strategy=SubscriptionOpeningStrategy.WAIT_FOR_FREE,
+        )
+    )
+    try:
+        worker.run(_handle_batch).result()
+    except Exception:
+        log.exception("Alert subscription worker stopped")
+    finally:
+        worker.close()
+
+
+@app.websocket("/ws/alerts")
+async def alerts_websocket(websocket: WebSocket) -> None:
+    await websocket.accept()
+    _alert_websockets.add(websocket)
+    try:
+        while True:
+            # Nothing is expected from the browser -- this just blocks until
+            # the client disconnects, which is what raises WebSocketDisconnect.
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        _alert_websockets.discard(websocket)
+
+
 async def _print_links_after_startup(host: str, port: str) -> None:
     """Fires one event-loop tick after this coroutine is scheduled, which is
     after uvicorn logs "Application startup complete." (it logs that line
@@ -120,6 +194,8 @@ async def _startup() -> None:
     # practice), since /health doesn't check DB connectivity.
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, seed_if_empty)
+
+    threading.Thread(target=_run_alert_subscription_worker, args=(loop,), daemon=True).start()
 
     openai_key = os.getenv("OPENAI_API_KEY")
     if _is_key_configured("OPENAI_API_KEY"):

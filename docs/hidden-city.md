@@ -119,4 +119,4 @@ SHORT_CONNECTION       — connection < 90 minutes
 - **Airline enforces** — some airlines (Ryanair, Wizz) have near-zero tolerance; lower score accordingly
 - **Price parity** — if `price_hidden >= price_direct`, score is 0.0, do not surface
 - **Same airline required** — interline hidden city (two carriers) almost never works; exclude or score very low
-- **Minimum savings threshold** — do not surface if savings < 100 PLN regardless of score; not worth the friction
+- **Minimum savings threshold** — do not surface if savings < $25 USD regardless of score; not worth the friction

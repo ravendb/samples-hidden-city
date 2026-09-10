@@ -133,6 +133,26 @@ class TestSearchRoutes:
         assert "hidden_city" in result["routes"][0]
 
     @pytest.mark.asyncio
+    async def test_unresolved_city_name_returns_explicit_note(self):
+        """A city name the model passes instead of an IATA code (e.g. "London")
+        that full-text search can't resolve must surface an explicit note asking
+        for clarification, not silently return zero routes indistinguishable from
+        a real "no such route" case."""
+        mock_store = self._mock_session_with_routes([])
+
+        with (
+            patch("src.tools.search_routes.get_store", return_value=mock_store),
+            patch("src.tools.search_routes.resolve_one_airport", return_value=None),
+        ):
+            result = await search_routes(origin="WAW", destination="London")
+
+        assert result["count"] == 0
+        assert result["routes"] == []
+        assert "London" in result["note"]
+        assert "nearby_alternatives" not in result
+        assert "connecting_hubs" not in result
+
+    @pytest.mark.asyncio
     async def test_empty_results(self):
         mock_store = self._mock_session_with_routes([])
 

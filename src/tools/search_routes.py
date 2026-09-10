@@ -24,7 +24,7 @@ from src.db.client import doc_to_dict, get_store, load_airport_names
 from src.db.geo import haversine_km
 from src.hidden_city.scorer import HiddenCityCandidate, RiskFactor
 from src.tools.get_live_prices import get_live_prices
-from src.tools.resolve_airports import resolve_one_airport
+from src.tools.resolve_airports import IATA_RE, resolve_one_airport
 
 log = logging.getLogger(__name__)
 
@@ -234,7 +234,7 @@ def _connecting_hub_candidates(store, origin: str, destination: str) -> list[dic
     return candidates[:_HUB_JOIN_MAX_RESULTS]
 
 
-def _resolve_iata(store, value: Optional[str]) -> Optional[str]:
+def _resolve_iata(store, value: Optional[str]) -> tuple[Optional[str], bool]:
     """Resolve a raw origin/destination/real_destination argument to an IATA
     code before it's used in a Routes query.
 
@@ -247,12 +247,22 @@ def _resolve_iata(store, value: Optional[str]) -> Optional[str]:
     silently match zero Routes documents. This reuses the same
     resolve_one_airport() full-text lookup the fast path already uses, rather
     than adding a new LLM tool (see CLAUDE.md's "no new tool without narrow
-    justification" rule). If resolution is ambiguous or finds nothing, the
-    value is returned unchanged (just upper-cased) so behaviour degrades to
-    exactly what it was before — an empty result — never a guess."""
+    justification" rule).
+
+    Returns (code, resolved) — resolved is False only when a non-IATA-shaped
+    value (a city/place name) failed to resolve via full-text search, so the
+    caller can surface an explicit note instead of silently returning zero
+    routes. An already IATA-shaped 3-letter value is always treated as
+    resolved and passed through unchanged (matching prior behaviour) — an
+    unrecognised or misspelled code isn't a "give me the code instead" case,
+    it just legitimately has no cached routes, which the existing
+    connecting_hubs/nearby_alternatives fallback already handles."""
     if not value:
-        return value
-    return resolve_one_airport(store, value) or value.upper()
+        return value, True
+    if IATA_RE.match(value.strip()):
+        return value.strip().upper(), True
+    resolved = resolve_one_airport(store, value)
+    return (resolved, True) if resolved else (value.upper(), False)
 
 
 def _within_budget(price: dict, budget_max: float, budget_currency: Optional[str]) -> bool:
@@ -280,9 +290,31 @@ async def search_routes(
     max_results: int = _DEFAULT_MAX_RESULTS,
 ) -> dict:
     store = get_store()
-    origin = _resolve_iata(store, origin)
-    destination = _resolve_iata(store, destination)
-    real_destination = _resolve_iata(store, real_destination)
+    origin_raw, destination_raw, real_destination_raw = origin, destination, real_destination
+    origin, origin_ok = _resolve_iata(store, origin)
+    destination, destination_ok = _resolve_iata(store, destination)
+    real_destination, real_destination_ok = _resolve_iata(store, real_destination)
+
+    unresolved = [
+        raw
+        for raw, ok in (
+            (origin_raw, origin_ok),
+            (destination_raw, destination_ok),
+            (real_destination_raw, real_destination_ok),
+        )
+        if raw and not ok
+    ]
+    if unresolved:
+        quoted = ", ".join(f"'{value}'" for value in unresolved)
+        return {
+            "routes": [],
+            "count": 0,
+            "note": (
+                f"Could not resolve {quoted} to a known airport. "
+                "Ask the user for the IATA code or a more specific city name."
+            ),
+        }
+
     hidden_city_mode = bool(real_destination) and not destination
 
     post_filtering = budget_max is not None or bool(countries_of_interest) or hidden_city_mode

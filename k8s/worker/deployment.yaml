@@ -7,6 +7,8 @@ metadata:
     app: subscription-worker
 spec:
   replicas: 1  # exactly one worker — RavenDB subscription delivers to one consumer
+  strategy:
+    type: Recreate  # old pod must release the subscription before the new one opens it
   selector:
     matchLabels:
       app: subscription-worker

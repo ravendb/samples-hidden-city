@@ -98,3 +98,19 @@ class SessionDocument(BaseModel):
 
     def last_n_turns(self, n: int = 10) -> list[ConversationTurn]:
         return self.turns[-n:]
+
+
+class PriceAlert(BaseModel):
+    """Written by src/worker/run.py when it detects a real price drop (not the
+    initial subscription replay -- see _handle_batch). Pushed to the chat UI
+    over /ws/alerts, itself backed by a RavenDB Data Subscription on this
+    collection (see src/agent/app.py) -- no polling anywhere in the path."""
+
+    origin: str
+    destination: str
+    via: Optional[str] = None
+    hidden_city_score: float = 0.0
+    old_price: float
+    new_price: float
+    currency: str = "USD"
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
