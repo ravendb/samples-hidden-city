@@ -773,39 +773,64 @@ step "Waiting for RavenDB cluster (60-120s)"
 echo "  Operator is: creating PVCs -> starting pods -> forming Raft quorum -> issuing TLS certs"
 echo ""
 
-raven_ready=false
-for i in $(seq 1 40); do
-  json=$(kubectl get ravendbcluster ravendb-cluster -n "$NS" -o json 2>/dev/null || true)
-  if [[ -n "$json" ]]; then
-    status=$(printf '%s' "$json" | python3 -c "
+# The Operator publishes 9 status conditions (bootstrap, cert wiring, Raft
+# formation, etc.) beyond just "Ready" -- surfacing them while we wait (and in
+# full on timeout) gives a developer something to act on immediately instead
+# of being told to go run kubectl describe themselves after the fact.
+_raven_conditions() {
+  kubectl get ravendbcluster ravendb-cluster -n "$NS" -o json 2>/dev/null | python3 -c "
 import json, sys
 try:
     d = json.load(sys.stdin)
-    conds = d.get('status', {}).get('conditions', [])
-    ready = next((c for c in conds if c.get('type') == 'Ready'), None)
-    print(ready.get('status') if ready else '')
 except Exception:
-    print('')
-" 2>/dev/null || true)
-    [[ "$status" == "True" ]] && { raven_ready=true; break; }
+    d = {}
+conds = d.get('status', {}).get('conditions', [])
+ready = next((c for c in conds if c.get('type') == 'Ready'), None)
+print(ready.get('status') if ready else '')
+for c in conds:
+    line = f\"{c.get('type')}={c.get('status')}\"
+    if c.get('reason'):
+        line += f\" ({c['reason']})\"
+    if c.get('message'):
+        line += f\": {c['message']}\"
+    print(line)
+" 2>/dev/null || true
+}
+
+raven_ready=false
+for i in $(seq 1 40); do
+  mapfile -t _lines < <(_raven_conditions)
+  status="${_lines[0]:-}"
+  conditions=("${_lines[@]:1}")
+  if [[ "$status" == "True" ]]; then
+    raven_ready=true
+    break
   fi
   printf '  [%2d/40] Not ready yet... (%s)\n' "$i" "$(date +%H:%M:%S)"
+  for c in "${conditions[@]}"; do
+    [[ "$c" == *=True* ]] || printf '           %s\n' "$c"
+  done
   sleep 5
 done
 
 if [[ "$raven_ready" == "true" ]]; then
   ok "RavenDB cluster Ready"
 else
+  warn "RavenDB did not reach Ready in time. Full status conditions:"
+  mapfile -t _lines < <(_raven_conditions)
+  for c in "${_lines[@]:1}"; do
+    warn "  $c"
+  done
+  warn "Also check:"
+  warn "  kubectl describe ravendbcluster ravendb-cluster -n $NS"
+  warn "  kubectl get pods -n $NS"
   # In CI/--no-wait this IS the smoke test -- a non-Ready cluster must fail
   # the run, not just warn and let the script carry on to a green exit 0.
   # Interactively, warn-and-continue is still useful: it leaves the cluster up
-  # so a developer can dig in with the commands below instead of losing it.
+  # so a developer can dig in with the commands above instead of losing it.
   if [[ "$NO_WAIT" == "true" || "${CI:-}" == "true" ]]; then
-    fail "RavenDB did not reach Ready within 200s (see kubectl describe ravendbcluster ravendb-cluster -n $NS)."
+    fail "RavenDB did not reach Ready within 200s."
   fi
-  warn "RavenDB did not reach Ready in time. Check:"
-  warn "  kubectl describe ravendbcluster ravendb-cluster -n $NS"
-  warn "  kubectl get pods -n $NS"
 fi
 
 # --- deploy app manifests ---

@@ -996,28 +996,53 @@ Write-Step $step $totalSteps "Waiting for RavenDB cluster (60-120s)"
 Write-Host "  Operator is: creating PVCs -> starting pods -> forming Raft quorum -> issuing TLS certs" -ForegroundColor Gray
 Write-Host ""
 
-$ravenReady = $false
-for ($i = 1; $i -le 40; $i++) {
+# The Operator publishes 9 status conditions (bootstrap, cert wiring, Raft
+# formation, etc.) beyond just "Ready" -- surfacing them while we wait (and in
+# full on timeout) gives a developer something to act on immediately instead
+# of being told to go run kubectl describe themselves after the fact.
+function Get-RavenConditions {
     # -o json + ConvertFrom-Json, not -o jsonpath: PowerShell's native-argument
     # quoting strips the embedded double quotes a jsonpath filter needs
     # (@.type=="Ready") before kubectl.exe ever sees them (verified -- the
     # jsonpath form always returned empty/exit 1 even once the cluster was
     # genuinely Ready), which silently kept this check permanently "not ready".
     $json = Invoke-Quiet { kubectl get ravendbcluster ravendb-cluster -n $NS -o json 2>$null } | Out-String
-    if ($json) {
-        try {
-            $readyCond = ($json | ConvertFrom-Json).status.conditions | Where-Object { $_.type -eq "Ready" }
-            if ($readyCond -and $readyCond.status -eq "True") { $ravenReady = $true; break }
-        } catch {}
+    if (-not $json) { return $null }
+    try {
+        return ($json | ConvertFrom-Json).status.conditions
+    } catch {
+        return $null
     }
+}
+
+function Format-RavenCondition($cond) {
+    $line = "$($cond.type)=$($cond.status)"
+    if ($cond.reason) { $line += " ($($cond.reason))" }
+    if ($cond.message) { $line += ": $($cond.message)" }
+    return $line
+}
+
+$ravenReady = $false
+for ($i = 1; $i -le 40; $i++) {
+    $conditions = Get-RavenConditions
+    $readyCond = $conditions | Where-Object { $_.type -eq "Ready" }
+    if ($readyCond -and $readyCond.status -eq "True") { $ravenReady = $true; break }
+
     Write-Host ("  [{0,2}/40] Not ready yet... ({1})" -f $i, (Get-Date -Format "HH:mm:ss")) -ForegroundColor Gray
+    foreach ($cond in ($conditions | Where-Object { $_.status -ne "True" })) {
+        Write-Host "           $(Format-RavenCondition $cond)" -ForegroundColor Gray
+    }
     Start-Sleep 5
 }
 
 if ($ravenReady) {
     Write-Ok "RavenDB cluster Ready"
 } else {
-    Write-Warn "RavenDB did not reach Ready in time. Check:"
+    Write-Warn "RavenDB did not reach Ready in time. Full status conditions:"
+    foreach ($cond in (Get-RavenConditions)) {
+        Write-Warn "  $(Format-RavenCondition $cond)"
+    }
+    Write-Warn "Also check:"
     Write-Warn "  kubectl describe ravendbcluster ravendb-cluster -n $NS"
     Write-Warn "  kubectl get pods -n $NS"
 }
