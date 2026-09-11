@@ -10,6 +10,10 @@ import pytest
 from src.agent import app as app_module
 
 
+async def _fake_validate_openai_key(api_key: str) -> bool:
+    return True
+
+
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
     for key in ("OPENAI_API_KEY", "RAVENDB_LICENSE", "TRAVELPAYOUTS_TOKEN"):
@@ -91,6 +95,7 @@ class TestApiSetupEndpoint:
         env_file = tmp_path / ".env"
         env_file.write_text("OPENAI_API_KEY=sk-...\n", encoding="utf-8")
         monkeypatch.setattr(app_module, "_ENV_FILE", env_file)
+        monkeypatch.setattr("src.agent.loop.validate_openai_key", _fake_validate_openai_key)
 
         result = await app_module.api_setup(
             app_module.SetupRequest(openai_api_key="sk-proj-real1234567890")

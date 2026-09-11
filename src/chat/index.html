@@ -4,9 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Hidden City Flight Search</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<link rel="stylesheet" href="/chat-assets/leaflet.css"/>
+<script src="/chat-assets/leaflet.js"></script>
+<script src="/chat-assets/marked.min.js"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
@@ -183,6 +183,7 @@
 
   /* Leaflet overrides */
   .leaflet-container { background: #0d1117; }
+  .world-outline { fill: #1a2233; stroke: #2e3347; stroke-width: 0.6; }
   .airport-marker {
     background: var(--accent2); border: 2px solid #fff;
     border-radius: 50%; width: 10px; height: 10px;
@@ -202,9 +203,32 @@
     box-shadow: 0 2px 8px rgba(0,0,0,0.5) !important;
   }
   .leaflet-tooltip-top::before { border-top-color: var(--border) !important; }
+
+  /* Price drop alerts -- pushed over /ws/alerts, backed by a RavenDB Data
+     Subscription on the PriceAlerts collection (see src/agent/app.py). */
+  #alert-toasts {
+    position: fixed; top: 16px; right: 16px; z-index: 2000;
+    display: flex; flex-direction: column; gap: 8px;
+    max-width: min(340px, calc(100vw - 32px));
+  }
+  .price-alert-toast {
+    background: var(--surface2); border: 1px solid var(--accent);
+    border-radius: var(--radius); padding: 10px 14px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    font-size: 0.8rem; color: var(--text);
+    animation: alert-in 0.2s ease-out;
+  }
+  .price-alert-toast .alert-title {
+    font-weight: 600; color: var(--accent2); margin-bottom: 2px;
+  }
+  .price-alert-toast .alert-price {
+    color: var(--text-muted); font-size: 0.75rem;
+  }
+  @keyframes alert-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
 </style>
 </head>
 <body>
+<div id="alert-toasts"></div>
 <div id="app">
  <div id="main-col">
   <header>
@@ -346,9 +370,12 @@ map = L.map('map-container', {
   zoomControl: true,
   attributionControl: false,
 });
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-  maxZoom: 19,
-}).addTo(map);
+// Plain projected world outline instead of raster map tiles -- no tile server,
+// no API key, nothing to break when offline (see D5: CARTO now requires a key).
+fetch('/chat-assets/world-110m.geojson')
+  .then(r => r.json())
+  .then(geojson => L.geoJSON(geojson, { className: 'world-outline' }).addTo(map))
+  .catch(() => {});
 arcLayer = L.layerGroup().addTo(map);
 
 function makeIcon(iata, isSelected) {
@@ -659,6 +686,31 @@ async function sendMessage() {
 function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
+
+// ---- Price drop alerts: pushed live via /ws/alerts (RavenDB Data
+// Subscription on the PriceAlerts collection -- no polling, see
+// src/agent/app.py and src/worker/run.py). ----
+function showAlertToast(alert) {
+  const el = document.createElement('div');
+  el.className = 'price-alert-toast';
+  const via = alert.via ? ` via ${escHtml(alert.via)}` : '';
+  el.innerHTML = `
+    <div class="alert-title">✈ Price drop: ${escHtml(alert.origin)} → ${escHtml(alert.destination)}${via}</div>
+    <div class="alert-price">$${alert.old_price} → $${alert.new_price} · score ${Number(alert.hidden_city_score).toFixed(2)}</div>
+  `;
+  document.getElementById('alert-toasts').appendChild(el);
+  setTimeout(() => el.remove(), 8000);
+}
+
+function connectAlertSocket() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws/alerts`);
+  ws.onmessage = (ev) => {
+    try { showAlertToast(JSON.parse(ev.data)); } catch (e) { /* ignore malformed payload */ }
+  };
+  ws.onclose = () => setTimeout(connectAlertSocket, 3000);
+}
+connectAlertSocket();
 
 sendBtn.addEventListener('click', sendMessage);
 inputEl.addEventListener('keydown', e => {

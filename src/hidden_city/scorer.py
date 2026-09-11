@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 
-MIN_SAVINGS_PLN = 100.0
+MIN_SAVINGS_USD = 25.0
 MIN_SCORE_TO_SURFACE = 0.5
 
 
@@ -46,7 +46,7 @@ class HiddenCityCandidate:
 
     @property
     def should_surface(self) -> bool:
-        return self.score >= MIN_SCORE_TO_SURFACE and self.savings >= MIN_SAVINGS_PLN
+        return self.score >= MIN_SCORE_TO_SURFACE and self.savings >= MIN_SAVINGS_USD
 
 
 def score_candidate(

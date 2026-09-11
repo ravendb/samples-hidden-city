@@ -1,5 +1,15 @@
 # RavenDB as In-Cluster Working Memory for LLM Agents (K8s-Native)
 
+> This file is the working reference for Claude Code and other contributors —
+> repo conventions, architecture rationale, and rules for what the agent may
+> and may not do. If you're a human visitor looking for setup steps or a
+> project overview, start with [`README.md`](README.md) instead; come back
+> here for the "why," or the chat UI's landing page (`src/chat/landing.html`)
+> for the demo pitch. [`docs/architecture.md`](docs/architecture.md) and
+> [`docs/hidden-city.md`](docs/hidden-city.md) are the two deep dives this
+> file summarizes and defers to — treat those two as the source of truth for
+> the cost narrative and the detection algorithm respectively, not this file.
+
 ## Project Goal
 
 Demo showing that RavenDB co-located with inference pods eliminates the two costs
@@ -99,7 +109,11 @@ and when. Nothing is blindly injected. Only the user's prompt leaves the cluster
 .\start-k8s.ps1 -SkipBuild -SkipOperator # Windows: fast re-run, skips image rebuild + operator reinstall
 bash k8s/start-k8s.sh                    # macOS/Linux (or WSL2 on Windows): same flow, --skip-build/--skip-operator/--delete-cluster
 
-# Local dev (manual steps -- what start.ps1 -Mode Local automates)
+# Local mode (docker-compose stack: venv + deps via uv, RavenDB, seed, agent)
+.\start.ps1 -Mode Local                  # Windows
+bash start-local.sh                      # macOS/Linux (or WSL2 on Windows): same flow, --skip-seed/--worker
+
+# Local dev (manual steps -- what start.ps1 -Mode Local / start-local.sh automate)
 docker-compose up -d ravendb
 python -m scripts.seed_local          # seed airports + fixture routes
 uvicorn src.agent.app:app --reload --port 8001    # start agent on :8001
@@ -155,7 +169,7 @@ Competing stacks need a separate vector DB + document DB + blob store.
   "id": "sessions/user-42-sess-7",
   "user_id": "user-42",
   "turns": [
-    { "role": "user", "content": "Find hidden city WAW→NYC next Friday" },
+    { "role": "user", "content": "Find hidden city WAW→JFK next Friday" },
     { "role": "assistant", "content": "..." }
   ],
   "active_constraints": { "carry_on_only": true, "max_stops": 1 },
@@ -264,33 +278,13 @@ See @docs/hidden-city.md for full spec. Summary:
 ## Kubernetes Operator
 
 The `RavenDBCluster` CRD (from https://github.com/ravendb/ravendb-operator) is
-the contract. The Operator is the enforcer. Installed via Helm — see
-`k8s/operator/install.sh` — not applied as a raw manifest.
-
-```yaml
-apiVersion: ravendb.ravendb.io/v1
-kind: RavenDBCluster
-metadata:
-  name: ravendb-cluster
-spec:
-  nodes:
-    - tag: a
-      publicServerUrl: https://a.hiddencity.local:443
-      publicServerUrlTcp: tcp://a-tcp.hiddencity.local:443
-    - tag: b
-      publicServerUrl: https://b.hiddencity.local:443
-      publicServerUrlTcp: tcp://b-tcp.hiddencity.local:443
-    - tag: c
-      publicServerUrl: https://c.hiddencity.local:443
-      publicServerUrlTcp: tcp://c-tcp.hiddencity.local:443
-  mode: None  # self-signed via *CertSecretRef fields; use LetsEncrypt for a public demo
-  storage:
-    data:
-      size: 50Gi
-```
-
-See `k8s/ravendb/values.yaml` for the full chart values (cert/license secret
-refs, ingress config) actually used to deploy this cluster.
+the contract. The Operator is the enforcer. Installed via Helm, driven by
+`k8s/ravendb/values.yaml` (the single source of truth for this cluster's spec
+— see it for the full `nodes`, `mode`, `storage`, and ingress config actually
+used to deploy) — not applied as a raw manifest. Currently pinned to **one
+node** (`tag: a` only, b/c commented out) because the demo license doesn't
+permit multi-node clusters; see the `TEMPORARY` comment at the top of that
+file for how to restore 3-node.
 
 The Operator handles: bootstrapping (via a one-shot cluster-bootstrapper Job),
 certificate wiring, rolling node upgrades with safety gates (node-by-node,
@@ -298,8 +292,6 @@ halts on failed gates, resumes automatically once fixed, blocks downgrades),
 and continuous reconciliation against declared state. Admission webhooks block
 invalid configs before any damage is done. Note: initial node topology is fixed
 at bootstrap — adding/removing nodes later is a manual operation, not automatic.
-
-Contact Omer for operator internals — he wrote it.
 
 ## LLM Configuration
 
@@ -324,6 +316,11 @@ the drop-in replacement — the agent tool interface does not change.
 
 This is the core demo metric. Enforce it, measure it, show it on screen.
 The naive baseline (raw Travelpayouts response stuffed into prompt) runs 40k–100k tokens per call.
+
+These numbers are enforced by `MAX_RESPONSE_TOKENS` and `WARN_TOOL_TOKENS` in
+`src/agent/loop.py` — that's the actual source of truth if this table and the
+code ever disagree, not this file or docs/architecture.md's "How the Token
+Budget Works" section (same numbers, narrative framing for the cost story).
 
 ## Conversation Memory
 

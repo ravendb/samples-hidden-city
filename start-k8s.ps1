@@ -22,6 +22,15 @@
 # cluster even exists. Nothing about the cluster/operator/RavenDB deploy can
 # fail partway through for a missing secret or cert.
 # Operator project: https://github.com/ravendb/ravendb-operator
+#
+# Requires PowerShell 7+ (pwsh.exe). Windows' built-in powershell.exe is 5.1,
+# whose native-command stderr handling differs enough (see Invoke-Quiet below)
+# that this script's semantics don't hold there. Rather than a hard `#Requires
+# -Version 7.0` (which aborts under 5.1 before a single line of this script --
+# including a self-relaunch -- ever runs), the version check below is the
+# first thing this script actually executes, so plain `.\start-k8s.ps1` from a
+# stock Windows PowerShell 5.1 prompt can detect that and re-exec itself
+# under pwsh.exe automatically instead of just failing.
 
 param(
     [switch]$SkipBuild,
@@ -29,6 +38,28 @@ param(
     [switch]$DeleteCluster,
     [string]$ClusterName = "hidden-city"
 )
+
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    $pwsh = Get-Command pwsh -ErrorAction SilentlyContinue
+    if (-not $pwsh) {
+        Write-Host "This script requires PowerShell 7+. Install it with:" -ForegroundColor Red
+        Write-Host "  winget install Microsoft.PowerShell" -ForegroundColor Yellow
+        Write-Host "then re-run .\start-k8s.ps1 (or run it via `pwsh -File .\start-k8s.ps1`)." -ForegroundColor Yellow
+        exit 1
+    }
+    $relaunchArgs = @('-NoLogo', '-NoProfile', '-File', $MyInvocation.MyCommand.Path)
+    foreach ($key in $PSBoundParameters.Keys) {
+        $val = $PSBoundParameters[$key]
+        if ($val -is [switch]) {
+            if ($val.IsPresent) { $relaunchArgs += "-$key" }
+        } else {
+            $relaunchArgs += "-$key"
+            $relaunchArgs += "$val"
+        }
+    }
+    & $pwsh.Source @relaunchArgs
+    exit $LASTEXITCODE
+}
 
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
@@ -383,7 +414,10 @@ function Ensure-RavenDbCerts {
         # and values.yaml later scaled down to just a for a license limit --
         # RavenDB doesn't care about unused SAN entries). Only a MISSING SAN
         # for a currently active tag is the actual risk.
-        $expectedSans = ($NodeTags | ForEach-Object { "DNS:$_.hiddencity.local", "DNS:$_-tcp.hiddencity.local" }) | Sort-Object
+        $expectedSans = ($NodeTags | ForEach-Object {
+            "DNS:$_.hiddencity.local", "DNS:$_-tcp.hiddencity.local",
+            "DNS:ravendb-$_.$NS.svc.cluster.local"
+        }) | Sort-Object
         $sanOutput = & $openssl x509 -in "$CertsDir\server.crt" -noout -ext subjectAltName 2>$null
         $actualSans = [regex]::Matches(($sanOutput -join " "), '(DNS|IP Address):[^\s,]+') |
             ForEach-Object { $_.Value } | Sort-Object
@@ -466,7 +500,15 @@ function Ensure-RavenDbCerts {
     New-Item -ItemType Directory -Force -Path $CertsDir | Out-Null
     Write-Host "  Generating self-signed RavenDB TLS chain in k8s/ravendb/certs..." -ForegroundColor Gray
 
-    $sanEntries = ($NodeTags | ForEach-Object { "DNS:$_.hiddencity.local,DNS:$_-tcp.hiddencity.local" }) -join ","
+    # Also covers each node's Kubernetes-native Service DNS name (ravendb-<tag>)
+    # even though nothing uses it yet (RAVENDB_URL still connects via the
+    # hiddencity.local hostname the CoreDNS step resolves -- see that step's
+    # comment for why removing it isn't safe without changing publicServerUrl
+    # too). Adding it here is a no-op today and lets a future switch to the
+    # native name happen without a cert regen.
+    $sanEntries = ($NodeTags | ForEach-Object {
+        "DNS:$_.hiddencity.local,DNS:$_-tcp.hiddencity.local,DNS:ravendb-$_.$NS.svc.cluster.local"
+    }) -join ","
 
     @"
 [req]
@@ -991,28 +1033,53 @@ Write-Step $step $totalSteps "Waiting for RavenDB cluster (60-120s)"
 Write-Host "  Operator is: creating PVCs -> starting pods -> forming Raft quorum -> issuing TLS certs" -ForegroundColor Gray
 Write-Host ""
 
-$ravenReady = $false
-for ($i = 1; $i -le 40; $i++) {
+# The Operator publishes 9 status conditions (bootstrap, cert wiring, Raft
+# formation, etc.) beyond just "Ready" -- surfacing them while we wait (and in
+# full on timeout) gives a developer something to act on immediately instead
+# of being told to go run kubectl describe themselves after the fact.
+function Get-RavenConditions {
     # -o json + ConvertFrom-Json, not -o jsonpath: PowerShell's native-argument
     # quoting strips the embedded double quotes a jsonpath filter needs
     # (@.type=="Ready") before kubectl.exe ever sees them (verified -- the
     # jsonpath form always returned empty/exit 1 even once the cluster was
     # genuinely Ready), which silently kept this check permanently "not ready".
     $json = Invoke-Quiet { kubectl get ravendbcluster ravendb-cluster -n $NS -o json 2>$null } | Out-String
-    if ($json) {
-        try {
-            $readyCond = ($json | ConvertFrom-Json).status.conditions | Where-Object { $_.type -eq "Ready" }
-            if ($readyCond -and $readyCond.status -eq "True") { $ravenReady = $true; break }
-        } catch {}
+    if (-not $json) { return $null }
+    try {
+        return ($json | ConvertFrom-Json).status.conditions
+    } catch {
+        return $null
     }
+}
+
+function Format-RavenCondition($cond) {
+    $line = "$($cond.type)=$($cond.status)"
+    if ($cond.reason) { $line += " ($($cond.reason))" }
+    if ($cond.message) { $line += ": $($cond.message)" }
+    return $line
+}
+
+$ravenReady = $false
+for ($i = 1; $i -le 40; $i++) {
+    $conditions = Get-RavenConditions
+    $readyCond = $conditions | Where-Object { $_.type -eq "Ready" }
+    if ($readyCond -and $readyCond.status -eq "True") { $ravenReady = $true; break }
+
     Write-Host ("  [{0,2}/40] Not ready yet... ({1})" -f $i, (Get-Date -Format "HH:mm:ss")) -ForegroundColor Gray
+    foreach ($cond in ($conditions | Where-Object { $_.status -ne "True" })) {
+        Write-Host "           $(Format-RavenCondition $cond)" -ForegroundColor Gray
+    }
     Start-Sleep 5
 }
 
 if ($ravenReady) {
     Write-Ok "RavenDB cluster Ready"
 } else {
-    Write-Warn "RavenDB did not reach Ready in time. Check:"
+    Write-Warn "RavenDB did not reach Ready in time. Full status conditions:"
+    foreach ($cond in (Get-RavenConditions)) {
+        Write-Warn "  $(Format-RavenCondition $cond)"
+    }
+    Write-Warn "Also check:"
     Write-Warn "  kubectl describe ravendbcluster ravendb-cluster -n $NS"
     Write-Warn "  kubectl get pods -n $NS"
 }
@@ -1058,9 +1125,12 @@ Write-Ok "Agent deployment ready"
 # not a single "ravendb-cluster-svc" -- pick the first configured tag. RavenDB
 # only listens on HTTPS (443), even in mode: None (self-signed, not plaintext).
 # Local port 8081 (not 8080) deliberately avoids clashing with Local mode's
-# docker-compose RavenDB, which also binds host port 8080 -- run
-# `.\start.ps1 -Mode Local` and `.\start.ps1 -Mode K8s` side by side without
-# either stealing the other's port.
+# docker-compose RavenDB, which also binds host port 8080 -- but this only
+# avoids the RavenDB port clash. `.\start.ps1 -Mode Local` and
+# `.\start.ps1 -Mode K8s` still CANNOT run at the same time: both bind the
+# agent to local port 8001 (Local mode's uvicorn, K8s mode's port-forward of
+# svc/agent-svc), so the second one to start fails to bind that port. Stop one
+# mode fully before starting the other.
 Write-Host "`n  Starting port-forwards..." -ForegroundColor Gray
 
 $firstNodeTag = (Get-RavenNodeTags | Select-Object -First 1)

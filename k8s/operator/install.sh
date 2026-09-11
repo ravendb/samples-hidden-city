@@ -20,6 +20,25 @@ set +a
 CERT_MANAGER_VERSION="${_user_cert_manager_version:-$CERT_MANAGER_VERSION}"
 OPERATOR_CHART_VERSION="${_user_operator_chart_version:-$RAVENDB_OPERATOR_CHART_VERSION}"
 
+# This script targets whatever cluster kubectl is already pointed at -- it
+# never creates or selects one itself (unlike start-k8s.sh's kind cluster), so
+# on a machine with multiple kube contexts a stale/wrong current-context
+# silently installs the operator onto the wrong cluster with no warning.
+# Surface it and require an explicit yes before mutating cluster state. Set
+# DEPLOY_SKIP_CONTEXT_CONFIRM=true to bypass in non-interactive runs (CI)
+# where the caller has already verified the context out-of-band.
+CURRENT_CONTEXT=$(kubectl config current-context 2>/dev/null || echo "<none>")
+echo "==> Target kubectl context: $CURRENT_CONTEXT"
+if [[ "${DEPLOY_SKIP_CONTEXT_CONFIRM:-}" != "true" ]]; then
+  if [[ -t 0 ]]; then
+    read -r -p "    Install onto this context? [y/N] " _confirm_context
+    [[ "$_confirm_context" =~ ^[Yy]$ ]] || { echo "Aborted — run 'kubectl config use-context <name>' to pick the right cluster, then re-run." >&2; exit 1; }
+  else
+    echo "Non-interactive shell and no context confirmed — set DEPLOY_SKIP_CONTEXT_CONFIRM=true to install onto '$CURRENT_CONTEXT' anyway." >&2
+    exit 1
+  fi
+fi
+
 echo "==> Installing cert-manager (${CERT_MANAGER_VERSION})..."
 kubectl apply -f "https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.yaml"
 

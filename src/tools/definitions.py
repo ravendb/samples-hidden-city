@@ -31,13 +31,14 @@ TOOL_DEFINITIONS = [
                     "real_destination": {
                         "type": "string",
                         "description": (
-                            "For hidden city search: the city the user actually wants to reach. "
-                            "Returns routes where this airport appears as a hub."
+                            "For hidden city search: IATA code of the city the user actually "
+                            "wants to reach (e.g. LHR). Returns routes where this airport "
+                            "appears as a hub."
                         ),
                     },
                     "carry_on_only": {
                         "type": "boolean",
-                        "description": "If true, apply checked-baggage risk penalty to hidden city candidates.",
+                        "description": "If false (i.e. the user has checked baggage), apply the checked-baggage risk penalty to hidden city candidates.",
                     },
                     "budget_max": {
                         "type": "number",

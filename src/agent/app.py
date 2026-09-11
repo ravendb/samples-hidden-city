@@ -5,13 +5,21 @@ Session loading/saving happens here; the loop itself is stateless.
 import asyncio
 import logging
 import os
+import socket
 import tempfile
 import threading
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from ravendb.documents.subscriptions.options import (
+    SubscriptionCreationOptions,
+    SubscriptionOpeningStrategy,
+    SubscriptionWorkerOptions,
+)
+from ravendb.exceptions.raven_exceptions import RavenException
 
 _ENV_FILE = Path(__file__).parent.parent.parent / ".env"
 _LICENSE_FILE = Path(__file__).parent.parent.parent / "license.json"
@@ -47,6 +55,10 @@ _LANDING_PATH = _CHAT_DIR / "landing.html"
 _SETUP_PATH   = _CHAT_DIR / "setup.html"
 _PROFILE_PATH = _CHAT_DIR / "profile.html"
 
+# Leaflet, marked, and the world outline GeoJSON are vendored here so the chat UI
+# never depends on unpkg/jsDelivr/CARTO tile CDNs staying up or key-free (see D5).
+app.mount("/chat-assets", StaticFiles(directory=_CHAT_DIR / "vendor"), name="chat-assets")
+
 
 _SCRAPE_MARKER = Path(tempfile.gettempdir()) / "hidden_city_last_scrape_ppid.txt"
 
@@ -66,7 +78,16 @@ def _is_reload_restart() -> bool:
     return False
 
 
-def _run_scraper_background() -> None:
+def _print_links(host: str, port: str) -> None:
+    ravendb_url = os.getenv("RAVENDB_URL", "http://localhost:8080")
+    print("\n  ── Links ──", flush=True)
+    print(f"  Chat UI         →  http://{host}:{port}/", flush=True)
+    print(f"  Swagger UI      →  http://{host}:{port}/docs", flush=True)
+    print(f"  RavenDB Studio  →  {ravendb_url}", flush=True)
+    print("", flush=True)
+
+
+def _run_scraper_background(host: str, port: str) -> None:
     """Runs the full Travelpayouts scrape on its own thread with its own event
     loop, fully isolated from uvicorn's main loop -- see the call site in
     _startup() for why. asyncio.create_task() alone was NOT enough: this
@@ -78,14 +99,87 @@ def _run_scraper_background() -> None:
     finished anyway, identical to the original blocking-await bug it was
     meant to fix (same millisecond in the logs, on two separate pods). A
     dedicated thread + its own loop can't be starved by anything happening on
-    the main loop, regardless of what mix of sync/async work runs inside."""
+    the main loop, regardless of what mix of sync/async work runs inside.
+
+    Re-prints the Links block once the scrape finishes: it can run 10+
+    minutes, easily long enough to scroll the block _print_links_after_startup
+    already printed off the top of a local terminal."""
     try:
         from src.scraper.run import run as _run_scraper
 
         asyncio.run(_run_scraper())
+        print("  Travelpayouts → scrape complete", flush=True)
+        _print_links(host, port)
     except Exception as _e:
         print(f"  Travelpayouts → failed: {_e}", flush=True)
         log.exception("Travelpayouts fetch failed at startup")
+
+
+# ---- Price drop alerts: /ws/alerts fans a RavenDB Data Subscription on the
+# PriceAlerts collection (populated by src/worker/run.py) out to connected
+# browsers. Each agent pod runs its own subscription under a name unique to
+# that pod (hostname), so with k8s/agent/deployment.yaml's replicas: 2 every
+# pod gets a full independent replay of the collection instead of the two
+# pods splitting a single shared subscription's documents between them --
+# a browser connected to either pod's websocket sees every alert. Still push
+# end to end, no polling. ----
+_alert_websockets: set[WebSocket] = set()
+
+
+async def _broadcast_alert(alert: dict) -> None:
+    dead = []
+    for ws in list(_alert_websockets):
+        try:
+            await ws.send_json(alert)
+        except Exception:
+            dead.append(ws)
+    for ws in dead:
+        _alert_websockets.discard(ws)
+
+
+def _run_alert_subscription_worker(loop: asyncio.AbstractEventLoop) -> None:
+    subscription_name = f"hidden-city-alerts-ui-{socket.gethostname()}"
+    store = get_store()
+    try:
+        store.subscriptions.create_for_options(
+            SubscriptionCreationOptions(query="from PriceAlerts", name=subscription_name)
+        )
+    except RavenException as e:
+        if "already in use" not in str(e).lower():
+            log.exception("Failed to create alert subscription %r", subscription_name)
+            return
+
+    def _handle_batch(batch) -> None:
+        for item in batch.items:
+            asyncio.run_coroutine_threadsafe(_broadcast_alert(item.result), loop)
+
+    worker = store.subscriptions.get_subscription_worker(
+        SubscriptionWorkerOptions(
+            subscription_name,
+            strategy=SubscriptionOpeningStrategy.WAIT_FOR_FREE,
+        )
+    )
+    try:
+        worker.run(_handle_batch).result()
+    except Exception:
+        log.exception("Alert subscription worker stopped")
+    finally:
+        worker.close()
+
+
+@app.websocket("/ws/alerts")
+async def alerts_websocket(websocket: WebSocket) -> None:
+    await websocket.accept()
+    _alert_websockets.add(websocket)
+    try:
+        while True:
+            # Nothing is expected from the browser -- this just blocks until
+            # the client disconnects, which is what raises WebSocketDisconnect.
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        _alert_websockets.discard(websocket)
 
 
 async def _print_links_after_startup(host: str, port: str) -> None:
@@ -95,12 +189,7 @@ async def _print_links_after_startup(host: str, port: str) -> None:
     loop gets back around to this task) -- so the links land at the bottom,
     not buried under seeding/Travelpayouts scrape output further up."""
     await asyncio.sleep(0.1)
-    ravendb_url = os.getenv("RAVENDB_URL", "http://localhost:8080")
-    print("\n  ── Links ──", flush=True)
-    print(f"  Chat UI         →  http://{host}:{port}/", flush=True)
-    print(f"  Swagger UI      →  http://{host}:{port}/docs", flush=True)
-    print(f"  RavenDB Studio  →  {ravendb_url}", flush=True)
-    print("", flush=True)
+    _print_links(host, port)
 
 
 @app.on_event("startup")
@@ -120,6 +209,8 @@ async def _startup() -> None:
     # practice), since /health doesn't check DB connectivity.
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, seed_if_empty)
+
+    threading.Thread(target=_run_alert_subscription_worker, args=(loop,), daemon=True).start()
 
     openai_key = os.getenv("OPENAI_API_KEY")
     if _is_key_configured("OPENAI_API_KEY"):
@@ -168,7 +259,7 @@ async def _startup() -> None:
             # deadline. The scrape still writes the same data to RavenDB
             # either way -- only *when the pod is allowed to answer
             # /health* changes, not what happens.
-            threading.Thread(target=_run_scraper_background, daemon=True).start()
+            threading.Thread(target=_run_scraper_background, args=(host, port), daemon=True).start()
     else:
         _set_travelpayouts_token_valid(None)
         print("  Travelpayouts → TRAVELPAYOUTS_TOKEN not set, skipping", flush=True)
@@ -189,6 +280,7 @@ class ChatResponse(BaseModel):
     output_tokens: int
     total_tokens: int
     tool_calls: int
+    openai_egress_bytes: int | None = None
 
 
 def _load_conversation_context(user_id: str, session_id: str) -> tuple[list[dict], dict]:
@@ -482,6 +574,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
         output_tokens=result.output_tokens,
         total_tokens=result.total_tokens,
         tool_calls=result.tool_calls,
+        openai_egress_bytes=result.openai_egress_bytes,
     )
 
 
