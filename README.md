@@ -17,11 +17,11 @@ A few steps are required to run the application locally.
 1. Check out the Git repository
 2. Install prerequisites:
       a. [Docker](https://docs.docker.com/get-docker/) (Docker Desktop on macOS, Docker Engine or Docker Desktop on Linux)
-      b. **Windows only**: PowerShell 7+ (`pwsh.exe`) — the built-in PowerShell 5.1 (`powershell.exe`) is not supported
+      b. **Windows only**: PowerShell 7+ (`pwsh.exe`) — install with `winget install Microsoft.PowerShell` if you don't have it. Not required to already be your active shell: `start.ps1`/`start-k8s.ps1` detect the built-in PowerShell 5.1 (`powershell.exe`) and auto-relaunch themselves under `pwsh.exe`
       c. Free local ports: `8001` (agent), `8080` + `38888` (RavenDB, Local mode) or `8081` (RavenDB Studio, Kubernetes mode)
       d. Resources: ~5 GB free disk (Docker images, RavenDB data volume, Python venv) and 4 GB+ RAM available to Docker
 3. Start the app and pick a mode when prompted:
-      - **Windows**: `.\start.ps1` (requires PowerShell 7+ — run via `pwsh.exe`, not the built-in 5.1 `powershell.exe`)
+      - **Windows**: `.\start.ps1` (requires PowerShell 7+ installed — the script itself auto-relaunches under `pwsh.exe` even if run from the built-in 5.1 `powershell.exe`)
       - **macOS / Linux / WSL2 — Kubernetes mode**: `bash k8s/start-k8s.sh`
       - **macOS / Linux / WSL2 — Local mode**: `bash start-local.sh`
 4. Before the first run, both modes prompt you to enter:
@@ -30,6 +30,26 @@ A few steps are required to run the application locally.
    c. The RavenDB license - can be picked up silently from `license.json` in the repo root. Get a free Community license at [ravendb.net/download](https://ravendb.net/download).
 5. RavenDB Studio is available at `http://localhost:8080` (Local mode) or `https://localhost:8081` (Kubernetes mode). 
 
+## Stopping / tearing down
+
+How to stop, depending on which mode you started with and how much you want to keep.
+
+**Local mode** (`start-local.sh` / `start.ps1 -Mode Local`):
+- Press `Ctrl+C` in the terminal running it — the script's cleanup trap runs `docker compose down`, stopping the RavenDB container and releasing its ports.
+- This does **not** delete the RavenDB data volume, so the next `start-local.sh` run comes back up with the same data already seeded.
+- To also wipe the data volume: `docker compose down -v`.
+
+**Kubernetes mode** (`start-k8s.ps1` / `k8s/start-k8s.sh`):
+- To delete the whole kind cluster (nodes, RavenDB data, everything — full reset):
+  ```bash
+  .\start-k8s.ps1 -DeleteCluster        # Windows
+  bash k8s/start-k8s.sh --delete-cluster  # macOS/Linux/WSL2
+  ```
+  Do this when you want a guaranteed-clean slate (e.g. after a botched TLS cert regen, a stuck cert-manager/operator install, or before switching license/node-count configs) — it's the only supported "reset everything" path; there's no partial/soft-reset flag.
+- To just pause work without deleting anything: leave the kind cluster running (it's a set of Docker containers) and re-run `start-k8s.ps1 -SkipBuild -SkipOperator` later to pick up where you left off — nothing needs to be stopped explicitly between sessions.
+- If you only need to redeploy app code without touching the cluster/operator/cert-manager: `bash k8s/deploy.sh --skip-operator --skip-build` (see "Key Commands" in [`CLAUDE.md`](CLAUDE.md)).
+
+**When to delete vs. redeploy:** prefer `-DeleteCluster`/`--delete-cluster` only when something in the cluster's underlying state is actually broken (expired cert-manager webhook cert, a cert/CA mismatch between RavenDB and its clients, a corrupted kind node) — for routine "I changed application code" iteration, `-SkipOperator`/`-SkipBuild` re-runs (or `k8s/deploy.sh`) are faster and don't throw away the RavenDB data volume.
 
 ## Features used
 

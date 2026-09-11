@@ -78,7 +78,16 @@ def _is_reload_restart() -> bool:
     return False
 
 
-def _run_scraper_background() -> None:
+def _print_links(host: str, port: str) -> None:
+    ravendb_url = os.getenv("RAVENDB_URL", "http://localhost:8080")
+    print("\n  ── Links ──", flush=True)
+    print(f"  Chat UI         →  http://{host}:{port}/", flush=True)
+    print(f"  Swagger UI      →  http://{host}:{port}/docs", flush=True)
+    print(f"  RavenDB Studio  →  {ravendb_url}", flush=True)
+    print("", flush=True)
+
+
+def _run_scraper_background(host: str, port: str) -> None:
     """Runs the full Travelpayouts scrape on its own thread with its own event
     loop, fully isolated from uvicorn's main loop -- see the call site in
     _startup() for why. asyncio.create_task() alone was NOT enough: this
@@ -90,11 +99,17 @@ def _run_scraper_background() -> None:
     finished anyway, identical to the original blocking-await bug it was
     meant to fix (same millisecond in the logs, on two separate pods). A
     dedicated thread + its own loop can't be starved by anything happening on
-    the main loop, regardless of what mix of sync/async work runs inside."""
+    the main loop, regardless of what mix of sync/async work runs inside.
+
+    Re-prints the Links block once the scrape finishes: it can run 10+
+    minutes, easily long enough to scroll the block _print_links_after_startup
+    already printed off the top of a local terminal."""
     try:
         from src.scraper.run import run as _run_scraper
 
         asyncio.run(_run_scraper())
+        print("  Travelpayouts → scrape complete", flush=True)
+        _print_links(host, port)
     except Exception as _e:
         print(f"  Travelpayouts → failed: {_e}", flush=True)
         log.exception("Travelpayouts fetch failed at startup")
@@ -174,12 +189,7 @@ async def _print_links_after_startup(host: str, port: str) -> None:
     loop gets back around to this task) -- so the links land at the bottom,
     not buried under seeding/Travelpayouts scrape output further up."""
     await asyncio.sleep(0.1)
-    ravendb_url = os.getenv("RAVENDB_URL", "http://localhost:8080")
-    print("\n  ── Links ──", flush=True)
-    print(f"  Chat UI         →  http://{host}:{port}/", flush=True)
-    print(f"  Swagger UI      →  http://{host}:{port}/docs", flush=True)
-    print(f"  RavenDB Studio  →  {ravendb_url}", flush=True)
-    print("", flush=True)
+    _print_links(host, port)
 
 
 @app.on_event("startup")
@@ -249,7 +259,7 @@ async def _startup() -> None:
             # deadline. The scrape still writes the same data to RavenDB
             # either way -- only *when the pod is allowed to answer
             # /health* changes, not what happens.
-            threading.Thread(target=_run_scraper_background, daemon=True).start()
+            threading.Thread(target=_run_scraper_background, args=(host, port), daemon=True).start()
     else:
         _set_travelpayouts_token_valid(None)
         print("  Travelpayouts → TRAVELPAYOUTS_TOKEN not set, skipping", flush=True)

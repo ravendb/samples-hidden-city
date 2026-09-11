@@ -11,8 +11,12 @@
 #
 # Requires PowerShell 7+ (pwsh.exe). Windows' built-in powershell.exe is 5.1,
 # whose native-command stderr handling differs enough (see Invoke-Quiet below)
-# that this script's semantics don't hold there -- run it via `pwsh.exe .\start.ps1`.
-#Requires -Version 7.0
+# that this script's semantics don't hold there. Rather than a hard `#Requires
+# -Version 7.0` (which aborts under 5.1 before a single line of this script --
+# including a self-relaunch -- ever runs), the version check below is the
+# first thing this script actually executes, so plain `.\start.ps1` from a
+# stock Windows PowerShell 5.1 prompt can detect that and re-exec itself
+# under pwsh.exe automatically instead of just failing.
 
 param(
     [ValidateSet("Local", "K8s", "")]
@@ -24,6 +28,28 @@ param(
     [switch]$DeleteCluster, # (K8s) delete the kind cluster and exit, forwarded to start-k8s.ps1
     [string]$ClusterName = "hidden-city"
 )
+
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    $pwsh = Get-Command pwsh -ErrorAction SilentlyContinue
+    if (-not $pwsh) {
+        Write-Host "This script requires PowerShell 7+. Install it with:" -ForegroundColor Red
+        Write-Host "  winget install Microsoft.PowerShell" -ForegroundColor Yellow
+        Write-Host "then re-run .\start.ps1 (or run it via `pwsh -File .\start.ps1`)." -ForegroundColor Yellow
+        exit 1
+    }
+    $relaunchArgs = @('-NoLogo', '-NoProfile', '-File', $MyInvocation.MyCommand.Path)
+    foreach ($key in $PSBoundParameters.Keys) {
+        $val = $PSBoundParameters[$key]
+        if ($val -is [switch]) {
+            if ($val.IsPresent) { $relaunchArgs += "-$key" }
+        } else {
+            $relaunchArgs += "-$key"
+            $relaunchArgs += "$val"
+        }
+    }
+    & $pwsh.Source @relaunchArgs
+    exit $LASTEXITCODE
+}
 
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
